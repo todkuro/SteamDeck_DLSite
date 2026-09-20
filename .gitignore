@@ -1,0 +1,35 @@
+# 個人の環境と購入情報が入るので、絶対に公開しないこと。
+#
+# state.json には購入済み作品の一覧が入る。シリアルコードが必要な作品を
+# 導入した場合、そのコードが平文で記録される。
+config.json
+state.json
+state.json.*
+cookies.txt
+*.bak-*
+
+# 取得したアーカイブと展開したゲーム本体
+downloads/
+games/
+games*/
+
+# 作業中に取った控え
+backups/
+
+# 参照用に手元へ置いた他プロジェクトのクローン
+reference/
+
+# 移行支援スクリプト。この環境の一度きりの作業専用で、他所では動かない。
+tools/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# エディタ・OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

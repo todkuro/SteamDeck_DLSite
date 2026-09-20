@@ -1,0 +1,2072 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DLsite for SteamDeck</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, "Noto Sans JP", sans-serif;
+         background: #16181d; color: #e6e8ec; }
+  header { position: sticky; top: 0; background: #1e2128; padding: 12px 16px;
+           border-bottom: 1px solid #2c313a; display: flex; gap: 12px;
+           align-items: center; flex-wrap: wrap; z-index: 5; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  .spacer { flex: 1; }
+  .tabs { display: flex; gap: 4px; }
+  .tab { background: transparent; border: 1px solid transparent; color: #9aa3b2; }
+  .tab.active { background: #262a33; border-color: #3a404b; color: #e6e8ec; }
+  #quit { border-color: #5a3a3a; color: #e0a8a8; }
+  /* 未保存があるとき、保存ボタンを目立たせる */
+  button.dirty { border-color: #b08a3a; box-shadow: 0 0 0 1px #b08a3a inset; }
+  #quit:hover { background: #3a2020; }
+  #shutdown-veil { position: fixed; inset: 0; background: #16181dee; z-index: 50;
+                   display: none; align-items: center; justify-content: center; }
+  #shutdown-veil.show { display: flex; }
+  #shutdown-veil div { text-align: center; font-size: 15px; line-height: 2; }
+  .toolbar { display: flex; gap: 8px; align-items: center;
+             flex-wrap: wrap; margin-bottom: 14px; }
+  /* 保存が要る画面では、操作列を見出しのすぐ下に貼り付ける。
+     下までスクロールして設定したあと、保存せずに他のタブへ移るのを防ぐため。
+     見出しは折り返しで高さが変わるので、実測値を --header-h に入れて使う。 */
+  .toolbar.stick {
+    position: sticky; top: var(--header-h, 56px); z-index: 4;
+    background: #16181d; border-bottom: 1px solid #2c313a;
+    /* main の内側の余白ぶん広げて、背景を端まで届かせる */
+    margin: -16px -16px 14px; padding: 12px 16px;
+  }
+  .card { border: 1px solid #2c313a; border-radius: 10px; padding: 14px 16px;
+          margin-bottom: 12px; }
+  .card h3 { margin: 0 0 10px; font-size: 13px; color: #9aa3b2; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 12em 1fr; gap: 6px 12px; font-size: 13px; }
+  .ok { color: #86d29a; }
+  .ng { color: #f0a0a0; }
+  .warn { color: #f0c674; }
+  ol.steps { margin: 6px 0 0; padding-left: 1.3em; font-size: 13px; line-height: 1.7; }
+  .setting { display: grid; grid-template-columns: 18em 1fr; gap: 10px;
+             align-items: start; padding: 9px 0; border-bottom: 1px solid #232730; }
+  .setting:last-child { border-bottom: none; }
+  .setting > label { font-size: 13px; padding-top: 7px; }
+  .setting .help { display: block; color: #8b93a1; font-size: 11px; margin-top: 3px; }
+  .setting input[type=text], .setting select, .setting textarea { width: 100%;
+             box-sizing: border-box; }
+  .setting textarea { min-height: 66px; font-family: ui-monospace, monospace;
+             font-size: 12px; }
+  .checks { display: flex; gap: 14px; flex-wrap: wrap; }
+  select, input, button { font: inherit; background: #262a33; color: inherit;
+           border: 1px solid #3a404b; border-radius: 6px; padding: 8px 10px; }
+  button { cursor: pointer; }
+  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { padding: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #262a33;
+           vertical-align: top; }
+  th { font-size: 12px; color: #9aa3b2; font-weight: 600; }
+  tr.outdated td { background: #2a2418; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+         background: #2c313a; color: #b9c0cc; white-space: nowrap; }
+  .tag.installed { background: #1d3a25; color: #86d29a; }
+  .tag.update { background: #4a3a12; color: #f0c674; }
+  /* 判定できないもの。導入済みと見分けが付くよう色を分ける */
+  .tag.unknown { background: #2b3038; color: #9aa3b2; }
+  /* Steam への登録状態。更新の状態とは別の軸なので並べて出す */
+  .tag.steam-yes { background: #1c2f42; color: #8ec2ee; }
+  .tag.steam-no { background: #3a2a1c; color: #e0b088; }
+  /* 別環境 (別 OS) の登録と名前がぶつかっているもの */
+  .tag.steam-foreign { background: #3a2036; color: #dda8dd; }
+  .muted { color: #8b93a1; font-size: 12px; }
+  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  dialog { background: #1e2128; color: #e6e8ec; border: 1px solid #3a404b;
+           border-radius: 10px; padding: 0; max-width: 640px; width: 92%; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .dialog-body { padding: 16px; }
+  .dialog-foot { padding: 12px 16px; border-top: 1px solid #2c313a;
+                 display: flex; gap: 8px; justify-content: flex-end; }
+  label.exe { display: flex; gap: 10px; padding: 9px 10px; border-radius: 8px;
+              align-items: baseline; cursor: pointer; }
+  /* 行の高さが違っても、丸の位置と文字の左端を揃える */
+  label.exe > input { flex: none; margin: 0; }
+  label.exe > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  label.exe:hover { background: #262a33; }
+  /* 空のときに余白と線が出ると、結び付けが 1 件も無い作品で宙に線が浮く */
+  #link-existing:not(:empty) { margin-bottom: 14px; border-bottom: 1px solid #2c313a; }
+  .link-row { display: flex; justify-content: space-between; align-items: center;
+              gap: 8px; padding: 6px 0; border-top: 1px solid #2c313a; }
+  .link-row .row-actions { flex: none; }
+  .field { margin-bottom: 14px; }
+  .field > span { display: block; font-size: 12px; color: #9aa3b2; margin-bottom: 6px; }
+  /* 幅いっぱいにしたいのは文字を打つ欄だけ。ラジオやチェックボックスに
+     width:100% が当たると、行ごとに幅の違う箱の中で丸が中央寄せになり、
+     縦の列が揃わなくなる。 */
+  .field input:not([type="radio"]):not([type="checkbox"]) {
+    width: 100%; box-sizing: border-box;
+  }
+  #notice { padding: 10px 16px; background: #3a2020; color: #f3b0b0; display: none; }
+  #steam-banner { padding: 10px 16px; background: #3a3320; color: #f0dfa8;
+                  display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #steam-banner.show { display: flex; }
+  #steam-banner button { background: #4a4230; border-color: #6a5f45; color: #f5ead0; }
+  #path-banner { padding: 10px 16px; background: #3a2020; color: #f3b0b0;
+                 display: none; }
+  #path-banner.show { display: block; }
+  #path-banner code { color: #f7d0d0; }
+  #path-banner .hint { display: block; margin-top: 4px; color: #f0c674; }
+  #result { padding: 10px 16px; background: #1d3a25; color: #a8e0ba; display: none; }
+  /* ヘッダの直下に貼り付ける。一覧を下へ辿っても進行状況が見えるように。 */
+  #jobs { position: sticky; top: 57px; z-index: 4; padding: 0 16px;
+          background: #16181d; }
+  #jobs:not(:empty) { padding: 8px 16px; border-bottom: 1px solid #2c313a; }
+  .job { border: 1px solid #2c313a; border-radius: 8px; padding: 10px 12px;
+         font-size: 13px; background: #1e2128;
+         display: flex; align-items: center; gap: 12px; }
+  .job-body { flex: 1; min-width: 0; }
+  .spinner { width: 14px; height: 14px; flex: none; border-radius: 50%;
+             border: 2px solid #3a404b; border-top-color: #2f6feb;
+             animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .job.cancelled { border-color: #5c4a2b; }
+  .btn-progress { display: inline-flex; align-items: center; gap: 6px; }
+  .btn-progress .spinner { width: 11px; height: 11px; border-width: 2px; }
+  .bar { height: 6px; background: #262a33; border-radius: 999px; overflow: hidden;
+         margin-top: 6px; }
+  .bar > div { height: 100%; background: #2f6feb; width: 0; }
+  .job.error { border-color: #6b2b2b; }
+  .job.done { border-color: #2b5c3a; }
+  .cover-warn { grid-column: 1 / -1; margin-top: 6px; font-size: 12px; line-height: 1.5; }
+  .guide-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; color: #e6e8ec; }
+  .guide-steps { margin: 8px 0 6px; padding-left: 22px; line-height: 1.8; }
+  .guide-steps li { color: #e6e8ec; }
+  .guide-note { font-size: 12px; color: #9aa3b2; margin-bottom: 8px; }
+  .guide-actions { display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DLsite for SteamDeck</h1>
+  <nav class="tabs">
+    <button class="tab active" data-tab="library">ライブラリ</button>
+    <button class="tab" data-tab="proton">Proton 設定</button>
+    <button class="tab" data-tab="status">状態・ログイン</button>
+    <button class="tab" data-tab="settings">設定</button>
+  </nav>
+  <div class="spacer"></div>
+  <span id="summary" class="muted"></span>
+  <button id="quit" title="このツールを終了します">終了</button>
+</header>
+
+<div id="shutdown-veil"><div id="shutdown-text"></div></div>
+<div id="path-banner"></div>
+<div id="steam-banner">
+  <span id="steam-banner-text">Steam 起動中のため設定できない項目があります</span>
+  <button id="steam-stop" type="button">Steam を終了する</button>
+  <button id="steam-recheck" type="button">Steam を終了しました</button>
+  <span id="steam-recheck-note" class="muted"></span>
+</div>
+<div id="notice"></div>
+<div id="result"></div>
+<div id="jobs"></div>
+
+<main>
+  <section id="view-library">
+    <div class="toolbar">
+      <select id="category"></select>
+      <select id="filter">
+        <option value="all">すべての状態</option>
+        <option value="missing">未取得のみ</option>
+        <option value="installed">導入済みのみ</option>
+        <option value="outdated">更新ありのみ</option>
+        <option value="unknown">更新不明のみ</option>
+        <option value="unregistered">Steam未登録のみ</option>
+        <option value="foreign">別環境と重複のみ</option>
+      </select>
+      <input id="search" type="search" placeholder="タイトル・IDで絞り込み" size="20">
+      <select id="sort">
+        <option value="default">既定の並び</option>
+        <option value="purchased">購入日</option>
+        <option value="title">タイトル</option>
+        <option value="updated">更新日</option>
+        <option value="status">状態</option>
+        <option value="size">サイズ</option>
+      </select>
+      <button id="order" title="昇順・降順を切り替える">昇順</button>
+      <button id="reload">再読み込み</button>
+      <button id="download-visible">表示中の未取得をまとめて取得</button>
+    </div>
+    <div class="toolbar">
+      <label for="install-dir" class="muted">インストール先</label>
+      <select id="install-dir"></select>
+      <span id="install-note" class="muted"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:9em">ID</th><th style="width:6em">状態</th>
+        <th>タイトル</th><th style="width:7em">サイズ</th>
+        <th style="width:9em">更新日</th><th style="width:14em">操作</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="unavailable" class="muted"></p>
+  </section>
+
+  <section id="view-status" hidden>
+    <div class="toolbar"><button id="status-reload">再確認</button></div>
+    <div id="status-body"></div>
+  </section>
+
+  <section id="view-proton" hidden>
+    <div class="toolbar">
+      <button id="proton-reload">再読み込み</button>
+      <select id="proton-filter">
+        <option value="all">すべて</option>
+        <option value="assigned">割り当て済み</option>
+        <option value="unset">未設定</option>
+      </select>
+      <select id="proton-sort">
+        <option value="title">タイトル順</option>
+        <option value="tool">Proton 順</option>
+      </select>
+      <button id="proton-order">昇順</button>
+      <input id="proton-search" type="search" placeholder="タイトルで絞り込み">
+      <span id="proton-note" class="muted"></span>
+    </div>
+    <div id="proton-body"></div>
+  </section>
+
+  <section id="view-settings" hidden>
+    <div class="toolbar stick">
+      <button id="settings-save" class="primary">保存</button>
+      <button id="settings-reload">読み直す</button>
+      <span id="settings-path" class="muted"></span>
+    </div>
+    <div id="settings-body"></div>
+  </section>
+</main>
+
+<dialog id="steam-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">Steam に登録</h2>
+    <div class="field">
+      <span>ライブラリに登録する名称（DLsite のタイトルが初期値です。変更できます）</span>
+      <input id="steam-title" type="text">
+    </div>
+    <div class="field">
+      <span>登録する実行ファイル</span>
+      <div id="exe-list"></div>
+    </div>
+    <div class="field">
+      <span>起動オプション（日本語の文字化けを避けるにはロケールを渡します）</span>
+      <input id="steam-launch" type="text" placeholder="LANG=ja_JP.UTF-8 %command%">
+    </div>
+    <p id="steam-note" class="muted"></p>
+  </div>
+  <div class="dialog-foot">
+    <button id="steam-cancel" type="button">キャンセル</button>
+    <button id="steam-submit" type="button" class="primary">登録する</button>
+  </div>
+</dialog>
+
+<dialog id="link-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">DLC を重ねる</h2>
+    <p class="muted" id="link-intro"></p>
+    <div id="link-existing"></div>
+    <div class="field">
+      <span>相手の作品</span>
+      <select id="link-other"></select>
+      <label class="muted"><input type="checkbox" id="link-all-makers"> 別の出品者も表示する</label>
+    </div>
+    <div class="field">
+      <span>重ね方</span>
+      <select id="link-direction">
+        <option value="into-other">この作品を、相手に重ねる（多くの DLC・パッチ）</option>
+        <option value="from-other">相手の中身を、この作品に取り込む（続編で本編が要る形）</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>コピー元のフォルダ（空欄なら全体）</span>
+      <div class="picker"><input id="link-source-path" type="text" placeholder="例: Chapter1/Content">
+        <button id="link-pick-source" type="button">選ぶ</button></div>
+    </div>
+    <div class="field">
+      <span>コピー先のフォルダ（空欄なら直下）</span>
+      <div class="picker"><input id="link-target-path" type="text" placeholder="例: Content">
+        <button id="link-pick-target" type="button">選ぶ</button></div>
+    </div>
+    <div class="field">
+      <span>置き方</span>
+      <select id="link-mode">
+        <option value="copy">コピーする（既定）</option>
+        <option value="symlink">シンボリックリンクにする（容量を節約）</option>
+      </select>
+    </div>
+    <div id="link-preview" class="muted"></div>
+  </div>
+  <div class="dialog-foot">
+    <button id="link-cancel" type="button">閉じる</button>
+    <button id="link-preview-btn" type="button">下見する</button>
+    <button id="link-submit" type="button" class="primary" disabled>適用する</button>
+  </div>
+</dialog>
+
+<dialog id="browse-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">フォルダを選ぶ</h2>
+    <p class="muted" id="browse-where"></p>
+    <div id="browse-list"></div>
+  </div>
+  <div class="dialog-foot">
+    <button id="browse-cancel" type="button">キャンセル</button>
+    <button id="browse-choose" type="button" class="primary">ここにする</button>
+  </div>
+</dialog>
+
+<dialog id="patch-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">パッチを当てる</h2>
+    <p class="muted">
+      exe を、当てる先のゲームの Proton プレフィックスで実行します。
+      割り当てられている Proton は自動で選ばれます。
+    </p>
+    <div class="field">
+      <span>当てる先のゲーム（Steam に登録し、一度起動したものだけ）</span>
+      <select id="patch-target"></select>
+    </div>
+    <div class="field">
+      <span>実行するパッチ</span>
+      <div id="patch-list"></div>
+    </div>
+    <div id="patch-output" class="muted"></div>
+  </div>
+  <div class="dialog-foot">
+    <button id="patch-cancel" type="button">閉じる</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let data = null;
+let dialogWork = null;
+
+function notice(message) {
+  const box = $("notice");
+  box.textContent = message || "";
+  box.style.display = message ? "block" : "none";
+  if (message) $("result").style.display = "none";
+}
+
+// 環境によっては loopback の接続が横から切られることがある (Windows の
+// セキュリティ製品など)。通信そのものが失敗した場合だけ数回やり直す。
+// サーバーが返したエラーは意味のある応答なので、やり直さずそのまま投げる。
+async function call(url, options, attempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(url, options);
+    } catch (error) {
+      lastError = error;
+      await new Promise((r) => setTimeout(r, 150 * attempt));
+      continue;
+    }
+    const payload = await response.json();
+    if (!response.ok || payload.error) {
+      const failure = new Error(payload.error || response.statusText);
+      // サーバーが種別と手順を付けてきたら、画面で出し分けるために持ち回る
+      failure.kind = payload.error_kind || "";
+      failure.steps = payload.error_steps || [];
+      throw failure;
+    }
+    return payload;
+  }
+  throw new Error(`通信に失敗しました (${attempts} 回試行): ${lastError && lastError.message}`);
+}
+
+async function load(refresh) {
+  notice("");
+  $("reload").disabled = true;
+  try {
+    data = await call("/api/library" + (refresh ? "?refresh=1" : ""));
+    // 一覧と同じ応答に Steam の状態が入っている。別に問い合わせない。
+    canQuitSteam = !(data.steam && data.steam.can_quit_steam === false);
+    setSteamRunning(!!(data.steam && data.steam.running));
+    renderPathWarning(data.paths);
+    renderCategories();
+    renderInstallDirs();
+    render();
+  } catch (error) {
+    showFailure(error);
+  } finally {
+    $("reload").disabled = false;
+  }
+}
+
+/**
+ * 失敗を画面に出す。
+ *
+ * ログインがまだなら、赤いエラーではなく**やることの一覧**を出す。
+ * 利用者の手違いではなく、まだ済ませていないだけなので。
+ */
+function showFailure(error) {
+  if (error.kind !== "login") {
+    notice(error.message);
+    return;
+  }
+
+  const steps = (error.steps || []).map((s) => `<li>${esc(s)}</li>`).join("");
+  $("notice").innerHTML =
+    `<div class="guide-title">DLsite にログインしてください</div>`
+    + `<div class="muted">${esc(error.message)}</div>`
+    + (steps ? `<ol class="guide-steps">${steps}</ol>` : "")
+    + `<div class="guide-note">ツールを再起動する必要はありません。`
+    + ` ログインしてから「再読み込み」を押せばそのまま続けられます。</div>`
+    + `<div class="guide-actions">`
+    + `<button type="button" id="guide-reload">再読み込み</button>`
+    + `<button type="button" id="guide-status">状態・ログインを開く</button>`
+    + `</div>`;
+  $("notice").style.display = "block";
+  $("result").style.display = "none";
+
+  $("guide-reload").onclick = () => load(true);
+  // タブの実物を押す。未保存の確認など、切り替えの作法をそのまま通すため。
+  $("guide-status").onclick =
+    () => document.querySelector('.tab[data-tab="status"]').click();
+}
+
+function renderCategories() {
+  const select = $("category");
+  const previous = select.value || "game";
+  const total = data.items.length;
+  select.innerHTML =
+    `<option value="__all__">すべて (${total})</option>` +
+    data.categories
+      .filter((c) => c.count > 0)
+      .map((c) => `<option value="${c.key}">${c.label} (${c.count})</option>`)
+      .join("");
+  select.value = [...select.options].some((o) => o.value === previous) ? previous : "game";
+}
+
+// 既定のインストール先を選択状態にする。利用者が別を選んでいればそれを保つ。
+function renderInstallDirs() {
+  const select = $("install-dir");
+  const previous = select.value;
+  select.innerHTML = data.install_dirs
+    .map((dir) => `<option value="${esc(dir)}">${esc(dir)}${
+      dir === data.install_dir ? "（既定）" : ""}</option>`)
+    .join("");
+  select.value = data.install_dirs.includes(previous) ? previous : data.install_dir;
+  $("install-note").textContent = data.delete_archives
+    ? "展開後にアーカイブは削除されます"
+    : "展開後もアーカイブを残します";
+}
+
+function chosenInstallDir() {
+  return $("install-dir").value || data.install_dir;
+}
+
+// ---- 並べ替え ------------------------------------------------------
+let descending = false;
+
+// 状態の並び順。手を動かす必要がある順に並べる。
+//
+// 「更新不明」は判定できない作品では常にそう出るだけで、対処のしようが無い。
+// 参考にならないので「登録済み」と同じ段に置く。
+const STATUS_RANK = {
+  outdated: 0,      // 更新あり
+  foreign: 1,       // 別環境と重複（操作が塞がっているので対処が要る）
+  unregistered: 2,  // Steam未登録
+  done: 3,          // 登録済み / 更新不明
+  recordOnly: 4,    // 記録のみ（フォルダが実在しない）
+  missing: 5,       // 未取得
+};
+
+function statusRank(item) {
+  if (item.outdated) return STATUS_RANK.outdated;
+  if (item.steam_foreign) return STATUS_RANK.foreign;
+  if (item.installed) {
+    // Steam 登録の話はゲームだけ。マンガや音声を「未登録」に混ぜない。
+    if (item.category === "game" && item.steam_registered === false) {
+      return STATUS_RANK.unregistered;
+    }
+    return STATUS_RANK.done;
+  }
+  // 記録はあるがフォルダが無い (消したか、SD カードが未マウントか)
+  if (item.status_label === "記録のみ") return STATUS_RANK.recordOnly;
+  return STATUS_RANK.missing;
+}
+
+// DLsite のタイトルには前後に空白が混じっているものがある (実ライブラリ 130 件中 6 件)。
+// そのまま比べると、その 6 件だけ名前と無関係に先頭へ集まってしまう。
+function byTitle(a, b) {
+  return String(a.title || "").trim()
+    .localeCompare(String(b.title || "").trim(), "ja");
+}
+
+// 値が無いものは、昇順でも降順でも末尾に置く。
+// 「更新日が無い作品」が先頭を占めると一覧が読みにくいため。
+function compareWithBlanksLast(left, right, extract) {
+  const a = extract(left);
+  const b = extract(right);
+  const aEmpty = a === "" || a === null || a === undefined;
+  const bEmpty = b === "" || b === null || b === undefined;
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return Number.POSITIVE_INFINITY;
+  if (bEmpty) return Number.NEGATIVE_INFINITY;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function sortItems(items) {
+  const key = $("sort").value;
+  if (key === "default") return items;
+
+  const compare = {
+    purchased: (a, b) => compareWithBlanksLast(a, b, (x) => x.purchased_sort),
+    updated: (a, b) => compareWithBlanksLast(a, b, (x) => x.upgrade_sort),
+    size: (a, b) => compareWithBlanksLast(a, b, (x) => x.size),
+    status: (a, b) => statusRank(a) - statusRank(b),
+    title: byTitle,
+  }[key];
+
+  const sorted = [...items].sort((a, b) => {
+    const result = compare(a, b);
+    // 値が無いものは向きに関わらず末尾へ
+    if (!Number.isFinite(result)) return result === Infinity ? 1 : -1;
+    if (result !== 0) return descending ? -result : result;
+    // タイトル以外で並べたときの第 2 キーはタイトル
+    return key === "title" ? 0 : byTitle(a, b);
+  });
+  return sorted;
+}
+
+$("sort").onchange = render;
+$("order").onclick = () => {
+  descending = !descending;
+  $("order").textContent = descending ? "降順" : "昇順";
+  render();
+};
+
+function visibleItems() {
+  const cat = $("category").value;
+  const mode = $("filter").value;
+  const term = $("search").value.trim().toLowerCase();
+  return data.items.filter((item) => {
+    if (cat !== "__all__" && item.category !== cat) return false;
+    if (mode === "missing" && item.installed) return false;
+    if (mode === "installed" && !item.installed) return false;
+    if (mode === "outdated" && !item.outdated) return false;
+    if (mode === "unknown" && !item.update_unknown) return false;
+    if (mode === "unregistered"
+        && !(item.installed && item.category === "game"
+             && item.steam_registered === false && !item.steam_foreign)) return false;
+    if (mode === "foreign" && !item.steam_foreign) return false;
+    if (term && !(item.title.toLowerCase().includes(term) ||
+                  item.id.toLowerCase().includes(term))) return false;
+    return true;
+  });
+}
+
+function render() {
+  // 一覧をまだ取れていない (ログイン前など) 段階でも、見回りから呼ばれる。
+  // ここで弾かないと data が null のまま触って、本当のエラーを覆い隠す。
+  if (!data) return;
+
+  const items = sortItems(visibleItems());
+  applyRows(items.map((item) => ({ id: item.id, html: rowHtml(item) })));
+
+  // 「取得したが Steam に載せていない」ものは見落としやすいので件数を出す
+  const pending = data.items.filter(
+    (i) => i.installed && i.category === "game" && i.steam_registered === false
+           && !i.steam_foreign).length;
+  const clash = data.items.filter((i) => i.steam_foreign).length;
+  $("summary").textContent =
+    `${items.length} 件表示 / 全 ${data.items.length} 件`
+    + (pending ? ` ・ Steam未登録 ${pending} 件` : "")
+    + (clash ? ` ・ 別環境と重複 ${clash} 件` : "");
+  $("unavailable").textContent = data.unavailable.length
+    ? `Play API が扱わない購入アイテム: ${data.unavailable.join(", ")}` : "";
+  // 要約の文字数で見出しが折り返すことがある
+  syncHeaderHeight();
+}
+
+// 1 行ぶんの HTML。中身は item と、その作品に走っているジョブで決まる。
+function rowHtml(item) {
+  // 更新の有無を判定できない作品が多い (DLsite が upgrade_date を返さない)。
+  // 「導入済み」とだけ出すと、更新が無いのか分からないのかの区別が付かない。
+  const tag = item.outdated ? '<span class="tag update">更新あり</span>'
+    : item.installed
+      ? (item.update_unknown
+          ? '<span class="tag unknown" title="DLsite が更新日を返さないため、'
+            + '更新の有無を判定できません">更新不明</span>'
+          : '<span class="tag installed">導入済み</span>')
+    : `<span class="tag">${esc(item.status_label)}</span>`;
+
+  // 取得しただけなのか Steam に載せたのかは、更新の状態とは別の話。
+  // 同じタグに混ぜると読み取りにくいので、並べて出す。
+  // 対象はゲームだけ (マンガや音声は Steam に登録しない)。
+  let steamTag = "";
+  if (item.installed && item.category === "game" && item.steam_foreign) {
+    // 別環境のショートカットと同名。触るとそちらを壊すので操作させない。
+    steamTag = '<span class="tag steam-foreign" title="同じ名前のショートカットが'
+      + '別の環境 (別 OS) のものとして Steam にあります。このまま登録・解除すると'
+      + 'そちらを書き換えるため、操作できません">別環境と重複</span>';
+  } else if (item.installed && item.category === "game") {
+    steamTag = item.steam_registered === true
+      ? '<span class="tag steam-yes">Steam登録済み</span>'
+      : item.steam_registered === false
+        ? '<span class="tag steam-no">Steam未登録</span>'
+        : '<span class="tag unknown" title="Steam が見つからないため確認できません">登録状態不明</span>';
+  }
+  const steam = item.steam_app_id
+    ? `<div class="muted">Steam: ${esc(item.steam_title)}</div>` : "";
+  // 取得中の作品は、行のボタンでも進行が分かるようにする。
+  // 上部の表示が見えない位置までスクロールしていても状況を掴めるように。
+  const job = jobsByWork[item.id];
+  const actions = [];
+
+  if (job && job.status === "queued") {
+    // 順番待ち。まだ何も始めていないので、いつでも取り下げられる。
+    actions.push(
+      `<span class="btn-progress muted">順番待ち ${job.queue_position}</span>`);
+    actions.push(`<button data-cancel="${job.id}">取り消し</button>`);
+  } else if (job) {
+    const percent = jobPercent(job);
+    actions.push(
+      `<span class="btn-progress muted"><span class="spinner"></span>${
+        percent == null ? "取得中" : percent + "%"}</span>`);
+    actions.push(
+      job.cancellable && !job.cancel_requested
+        ? `<button data-cancel="${job.id}">中止</button>`
+        : `<button disabled title="${
+            job.cancel_requested ? "中止しています" : "展開中は中止できません"
+          }">中止</button>`);
+  } else {
+    actions.push(
+      `<button data-download="${esc(item.id)}">${
+        item.installed ? "再取得" : "取得"}</button>`);
+    // Steam 起動中に押しても、Steam の終了時に書き換えが捨てられるだけなので塞ぐ。
+    // 別環境の登録と名前がぶつかっている場合も、そちらを壊すので塞ぐ。
+    const steamBlocked = steamRunning
+      ? ' disabled title="Steam 起動中は操作できません"'
+      : item.steam_foreign
+        ? ' disabled title="別環境の登録と名前がぶつかっています。登録名を変えるか Steam 側で整理してください"'
+        : "";
+    if (item.installed && item.category === "game") {
+      actions.push(
+        `<button data-steam="${esc(item.id)}"${steamBlocked}>Steam登録</button>`);
+    }
+    if (item.steam_app_id) {
+      actions.push(
+        `<button data-unsteam="${esc(item.id)}"${steamBlocked}>解除</button>`);
+    }
+    if (item.installed) {
+      // DLC は本編と別作品として売られているので、どの作品からでも開ける
+      actions.push(`<button data-link="${esc(item.id)}" title="本編や DLC と重ねる">DLC</button>`);
+      actions.push(`<button data-patch="${esc(item.id)}" title="exe を実行して当てるパッチ">パッチ</button>`);
+      // Steam に登録したものは、消すと起動できないショートカットが残る。
+      // 解除してからでないと削除させない。
+      if (item.steam_app_id) {
+        actions.push('<button disabled title="先に Steam 登録を解除してください">削除</button>');
+      } else {
+        actions.push(
+          `<button data-delete="${esc(item.id)}" title="展開したファイルを削除">削除</button>`);
+      }
+    }
+  }
+  // 更新日が取れる作品は「更新日 / 導入時の更新日」を出す。
+  // 取れない作品 (DLsite が返さないものが多い) は、代わりに
+  // タイトルの版と導入日時を出して手がかりにする。
+  let dateCell;
+  if (item.upgrade_date) {
+    const installedDate = item.installed
+      ? `<div class="muted">導入時 ${esc(item.installed_upgrade_date || "不明")}</div>`
+      : "";
+    dateCell = esc(item.upgrade_date) + installedDate;
+  } else {
+    const lines = [];
+    lines.push(item.version
+      ? `<span title="タイトルに書かれた版">Ver.${esc(item.version)}</span>`
+      : '<span class="muted">更新日なし</span>');
+    if (item.installed && item.installed_version && item.installed_version !== item.version) {
+      lines.push(`<div class="muted">導入時 Ver.${esc(item.installed_version)}</div>`);
+    }
+    if (item.installed && item.installed_at) {
+      lines.push(`<div class="muted">導入 ${esc(item.installed_at)}</div>`);
+    }
+    dateCell = lines.join("");
+  }
+
+  return `<tr class="${item.outdated ? "outdated" : ""}">
+    <td><code>${esc(item.id)}</code></td>
+    <td>${tag}${steamTag ? "<br>" + steamTag : ""}</td>
+    <td>${esc(item.title)}<div class="muted">${esc(item.maker || "")}</div>${steam}</td>
+    <td class="muted">${esc(item.size_label)}</td>
+    <td>${dateCell}</td>
+    <td><div class="row-actions">${actions.join("")}</div></td>
+  </tr>`;
+}
+
+//: 前回描いた行の中身。変わっていない行を作り直さないために覚えておく。
+let renderedRows = new Map();
+
+/**
+ * 行を差し替える。**中身が変わった行だけ**を作り直す。
+ *
+ * 以前は毎回 innerHTML をまるごと入れ替えていた。取得中は 700ms ごとに
+ * これが起きるため、押している最中に行が作り直されるとクリックが消える
+ * (押した要素が文書から外れ、click の着地点がボタンでなくなる)。
+ * 変わらない行の要素をそのまま使えば、その事故は起きない。
+ */
+function applyRows(rows) {
+  const tbody = $("rows");
+
+  const existing = new Map();
+  for (const tr of tbody.children) {
+    if (tr.__workId) existing.set(tr.__workId, tr);
+  }
+
+  const next = rows.map((row) => {
+    const kept = existing.get(row.id);
+    if (kept && renderedRows.get(row.id) === row.html) return kept;
+
+    const template = document.createElement("template");
+    template.innerHTML = row.html;
+    const node = template.content.firstElementChild;
+    node.__workId = row.id;
+    return node;
+  });
+
+  // 並べ替えは要素を動かすだけ。作り直さないので押した要素は生きたまま。
+  let cursor = tbody.firstElementChild;
+  for (const node of next) {
+    if (cursor === node) {
+      cursor = cursor.nextElementSibling;
+    } else {
+      tbody.insertBefore(node, cursor);
+    }
+  }
+  while (cursor) {
+    const following = cursor.nextElementSibling;
+    tbody.removeChild(cursor);
+    cursor = following;
+  }
+
+  renderedRows = new Map(rows.map((row) => [row.id, row.html]));
+}
+
+$("category").onchange = render;
+$("filter").onchange = render;
+$("search").oninput = render;
+$("reload").onclick = () => load(true);
+
+document.addEventListener("click", async (event) => {
+  const target = event.target.closest("button");
+  if (!target) return;
+
+  if (target.dataset.download) {
+    target.disabled = true;
+    try {
+      await call("/api/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          work_id: target.dataset.download,
+          install_dir: chosenInstallDir(),
+        }),
+      });
+      pollJobs();
+    } catch (error) { notice(error.message); }
+    target.disabled = false;
+  }
+
+  if (target.dataset.cancel) {
+    target.disabled = true;
+    try {
+      await call("/api/download/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: Number(target.dataset.cancel) }),
+      });
+      pollJobs();
+    } catch (error) { notice(error.message); target.disabled = false; }
+  }
+
+  if (target.dataset.steam) await openSteamDialog(target.dataset.steam);
+  if (target.dataset.link) await openLinkDialog(target.dataset.link);
+  if (target.dataset.patch) await openPatchDialog(target.dataset.patch);
+
+  if (target.dataset.unsteam) {
+    if (!(await ensureSteamStopped())) return;
+    try {
+      await call("/api/steam/unregister", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ work_id: target.dataset.unsteam }),
+      });
+      await load(false);
+    } catch (error) { notice(error.message); }
+  }
+
+  if (target.dataset.delete) {
+    const workId = target.dataset.delete;
+    target.disabled = true;
+
+    // 何が消えて何が残るかを先に聞く。特に、この作品を DLC として
+    // 他の作品に重ねてある場合、重ねたファイルは相手側に残る。
+    let preview;
+    try {
+      preview = await call(`/api/delete/preview?work_id=${encodeURIComponent(workId)}`);
+    } catch (error) { notice(error.message); target.disabled = false; return; }
+
+    const lines = [preview.title, "", `展開先 ${preview.size_label} を削除します。`];
+    if (preview.cache_label && preview.cache_label !== "0 B") {
+      lines.push(`キャッシュ ${preview.cache_label} も削除します。`);
+    }
+    if (preview.backup_count) {
+      // 戻す先の作品ごと消えるので、控えだけ残しても使い道がない
+      lines.push(
+        `DLC を重ねたときの退避 ${preview.backup_count} 件`
+        + `（${preview.backup_label}）も一緒に片付けます。`);
+    }
+    if (preview.applied_to && preview.applied_to.length) {
+      lines.push("");
+      lines.push("この作品は DLC として次に適用済みです:");
+      preview.applied_to.forEach((x) => lines.push(`  ・${x.title}`));
+      lines.push("重ねたファイルは相手側に残ります（結び付けの記録だけ消えます）。");
+    }
+    lines.push("");
+    lines.push("DLsite からいつでも取り直せますが、この操作は元に戻せません。");
+
+    if (!confirm(lines.join("\n"))) { target.disabled = false; return; }
+    try {
+      const r = await call("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ work_id: workId }),
+      });
+      notice(r.message);
+      await load(false);
+    } catch (error) { notice(error.message); target.disabled = false; }
+  }
+});
+
+async function openSteamDialog(workId) {
+  notice("");
+  // 一覧を開いたまま Steam を起動していることがある。開く前に確かめる。
+  if (!(await ensureSteamStopped())) return;
+  // 取得に失敗したとき前回の作品の内容が残っていると別作品を登録しかねない
+  dialogWork = null;
+  $("steam-title").value = "";
+  $("exe-list").innerHTML = '<p class="muted">読み込み中…</p>';
+  $("steam-submit").disabled = true;
+
+  try {
+    const info = await call("/api/executables?work_id=" + encodeURIComponent(workId));
+    dialogWork = workId;
+    $("steam-title").value = info.steam_title;
+
+    if (!info.candidates.length) {
+      $("exe-list").innerHTML = '<p class="muted">実行ファイルが見つかりませんでした。</p>';
+      $("steam-submit").disabled = true;
+    } else {
+      $("steam-submit").disabled = false;
+      const chosen = info.selected || info.candidates[0].path;
+      $("exe-list").innerHTML = info.candidates.map((exe, index) => `
+        <label class="exe">
+          <input type="radio" name="exe" value="${exe.path.replace(/"/g, "&quot;")}"
+                 ${exe.path === chosen ? "checked" : ""}>
+          <span>${exe.relative.replace(/</g, "&lt;")}
+            <span class="muted">${exe.size_label}${
+              exe.suspicious ? " ・ゲーム本体でない可能性" : ""}</span>
+          </span>
+        </label>`).join("");
+    }
+
+    $("steam-launch").value = info.launch_options || "";
+
+    const steam = data.steam;
+    $("steam-note").textContent = steam.running
+      ? "Steam が起動中です。終了してから登録してください。"
+      : `登録先: ${steam.userdata || "(未検出)"}`;
+    $("steam-dialog").showModal();
+  } catch (error) { notice(error.message); }
+}
+
+// 登録はボタンの click で行う。dialog の close イベントは環境によって
+// 発火しないことがあり、そこに処理を載せると無言で何も起きなくなる。
+$("steam-cancel").onclick = () => {
+  dialogWork = null;
+  $("steam-dialog").close();
+};
+
+$("steam-submit").onclick = async () => {
+  const workId = dialogWork;
+  const chosen = document.querySelector('input[name="exe"]:checked');
+  if (!workId || !chosen) {
+    notice("登録する実行ファイルが選ばれていません。");
+    return;
+  }
+
+  $("steam-submit").disabled = true;
+  try {
+    const result = await call("/api/steam/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        work_id: workId,
+        executable: chosen.value,
+        title: $("steam-title").value,
+        // 空欄も「空にする」という指示として扱えるよう、必ず送る
+        launch_options: $("steam-launch").value,
+      }),
+    });
+    dialogWork = null;
+    $("steam-dialog").close();
+    notice("");
+    await load(false);
+    $("result").textContent =
+      `「${result.title}」を Steam に登録しました (AppID ${result.app_id})。` +
+      " Steam を起動すると出てきます。";
+    $("result").style.display = "block";
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    $("steam-submit").disabled = false;
+  }
+};
+
+// ---- タブ ----------------------------------------------------------
+const VIEWS = ["library", "proton", "status", "settings"];
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.onclick = () => {
+    // 設定を書きかけたまま移ると消えてしまう。
+    // 画面を切り替える前に尋ねること (切り替えた後だと居場所が分からなくなる)。
+    const leavingSettings =
+      !$("view-settings").hidden && tab.dataset.tab !== "settings";
+    if (leavingSettings && !mayLeaveSettings()) return;
+
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+    VIEWS.forEach((name) => {
+      $("view-" + name).hidden = name !== tab.dataset.tab;
+    });
+    // 見出しの高さは表示中の内容で変わる。貼り付く操作列の位置を合わせ直す。
+    syncHeaderHeight();
+    if (tab.dataset.tab === "proton") loadProton();
+    if (tab.dataset.tab === "status") loadStatus();
+    if (tab.dataset.tab === "settings") loadSettings();
+  };
+});
+
+// ---- 状態・ログイン ------------------------------------------------
+function mark(state) {
+  return `<span class="${state.ok ? "ok" : "ng"}">${state.ok ? "OK" : "要対応"}</span>`;
+}
+
+async function loadStatus() {
+  const body = $("status-body");
+  body.innerHTML = '<p class="muted">確認中…</p>';
+  try {
+    const s = await call("/api/status");
+    const steps = s.login_steps.map((step) => `<li>${esc(step)}</li>`).join("");
+    const hosts = s.cookies.hosts
+      .map((h) => `<div><code>${esc(h.host)}</code> <span class="muted">${
+        esc(h.names.join(", "))}</span></div>`)
+      .join("");
+    const paths = s.paths
+      .map((p) => `<div>${esc(p.label)}</div><div><code>${esc(p.path)}</code> ${
+        p.inside_project ? "" : '<span class="warn">（プロジェクト外）</span>'}</div>`)
+      .join("");
+
+    body.innerHTML = `
+      <div class="card">
+        <h3>セッション</h3>
+        <div class="kv">
+          <div>Cookie</div><div>${mark(s.cookies)} ${esc(s.cookies.detail)}</div>
+          <div>DLsite への接続</div><div>${mark(s.session)} ${esc(s.session.detail)}${
+            s.session.purchases != null ? `（購入 ${s.session.purchases} 件）` : ""}</div>
+        </div>
+        ${s.session.ok ? "" : `<h3 style="margin-top:14px">ログイン手順</h3>
+          <ol class="steps">${steps}</ol>
+          <p class="muted">${esc(s.login_note)}</p>`}
+        ${hosts ? `<details style="margin-top:10px"><summary class="muted">
+           読み取った Cookie</summary><div class="muted" style="margin-top:6px">${hosts}</div>
+           </details>` : ""}
+      </div>
+      <div class="card">
+        <h3>環境</h3>
+        <div class="kv">
+          <div>Python</div><div>${esc(s.python)}（dlsite_deck ${esc(s.version)}）</div>
+          <div>分割 RAR の展開</div><div>${mark(s.archive_tool)} ${esc(s.archive_tool.detail)}</div>
+          <div>ローマ字変換</div><div>${mark(s.pykakasi)} pykakasi: ${esc(s.pykakasi.detail)}</div>
+          <div>Steam</div><div>${s.steam.userdata
+            ? `<code>${esc(s.steam.userdata)}</code>${s.steam.running
+              ? ' <span class="warn">起動中（登録するには終了が必要）</span>'
+              : ' <span class="ok">終了している</span>'}`
+            : '<span class="ng">userdata 未検出</span>'}</div>
+          ${s.free_space ? `<div>展開先の空き</div><div>${esc(s.free_space)}</div>` : ""}
+          ${paths}
+        </div>
+      </div>`;
+  } catch (error) {
+    body.innerHTML = `<p class="ng">${esc(error.message)}</p>`;
+  }
+}
+$("status-reload").onclick = loadStatus;
+
+// ---- 設定 ----------------------------------------------------------
+let settings = null;
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function loadSettings() {
+  const body = $("settings-body");
+  body.innerHTML = '<p class="muted">読み込み中…</p>';
+  try {
+    settings = await call("/api/config");
+    $("settings-path").textContent = settings.path;
+    body.innerHTML = settings.fields.map((f) => renderField(f, settings.values[f.key])).join("");
+    applyDependencies();
+    warnAboutCoverTitle();
+    body.querySelectorAll("[data-key]").forEach((el) => {
+      el.addEventListener("change", applyDependencies);
+      el.addEventListener("change", warnAboutCoverTitle);
+      // 一覧を打ち込んでいる最中も既定の選択肢に反映する
+      if (el.tagName === "TEXTAREA") el.addEventListener("input", applyDependencies);
+      // 未保存の印を出すため、打鍵のたびに見比べる
+      el.addEventListener("input", updateDirtyMark);
+      el.addEventListener("change", updateDirtyMark);
+    });
+    markSettingsSaved();
+  } catch (error) {
+    body.innerHTML = `<p class="ng">${esc(error.message)}</p>`;
+  }
+}
+
+function renderField(field, value) {
+  const help = field.help ? `<span class="help">${esc(field.help)}</span>` : "";
+  let control = "";
+
+  if (field.type === "bool") {
+    control = `<input type="checkbox" data-key="${field.key}" ${value ? "checked" : ""}>`;
+  } else if (field.type === "choice") {
+    control = `<select data-key="${field.key}">${field.choices.map((c) =>
+      `<option value="${esc(c.value)}" ${c.value === value ? "selected" : ""}>${
+        esc(c.label)}</option>`).join("")}</select>`;
+  } else if (field.type === "list") {
+    control = `<textarea data-key="${field.key}">${esc((value || []).join("\n"))}</textarea>`;
+  } else if (field.type === "install_default") {
+    // 選択肢は「インストール先の一覧」の中身に追従させる
+    control = `<select data-key="${field.key}"></select>`;
+  } else if (field.type === "compat_tool") {
+    const options = [`<option value="">（割り当てない）</option>`].concat(
+      settings.compat_tools.map((tool) =>
+        `<option value="${esc(tool.value)}" ${tool.value === value ? "selected" : ""}>${
+          esc(tool.label)}</option>`));
+    control = `<select data-key="${field.key}">${options.join("")}</select>`;
+  } else if (field.type === "action") {
+    // 設定値ではなく操作。data-key を付けないので保存の対象にならない。
+    control = `<button type="button" data-action="${field.key}">${esc(field.button)}</button>`
+      + `<span class="muted" data-action-note="${field.key}"></span>`;
+  } else if (field.type === "slots") {
+    control = `<div class="checks">${settings.grid_slots.map((slot) =>
+      `<label><input type="checkbox" data-slot="${field.key}" value="${esc(slot.key)}" ${
+        (value || []).includes(slot.key) ? "checked" : ""}> ${esc(slot.label)}</label>`
+      ).join("")}</div>`;
+  } else {
+    control = `<input type="text" data-key="${field.key}" value="${esc(value)}">`;
+  }
+
+  return `<div class="setting" data-field="${field.key}">
+    <label>${esc(field.label)}${help}</label><div>${control}</div></div>`;
+}
+
+/**
+ * 「カバーにタイトルを載せる」を入れたとき、描けない環境なら知らせる。
+ *
+ * 黙って無効のままにすると、設定したのに効かない理由が分からない。
+ * 止めはしない (別の環境に持っていけば効くため)。
+ */
+function warnAboutCoverTitle() {
+  const row = document.querySelector('.setting[data-field="steam_cover_title"]');
+  if (!row) return;
+
+  let note = row.querySelector(".cover-warn");
+  const wanted = readValue("steam_cover_title") === true;
+  const bad = wanted && !settings.cover_title_supported;
+
+  if (!bad) {
+    if (note) note.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "cover-warn ng";
+    row.appendChild(note);
+  }
+  note.textContent = "⚠ " + settings.cover_title_problem;
+}
+
+function applyDependencies() {
+  syncInstallDefault();
+  settings.fields.forEach((field) => {
+    if (!field.depends) return;
+    const [key, expected] = field.depends.split("=");
+    const current = readValue(key);
+    const shown = String(current) === expected;
+    const row = document.querySelector(`.setting[data-field="${field.key}"]`);
+    if (row) row.hidden = !shown;
+  });
+}
+
+// 「既定のインストール先」の選択肢を「一覧」の内容から作り直す
+function syncInstallDefault() {
+  const select = document.querySelector('[data-key="install_dir"]');
+  if (!select) return;
+
+  const dirs = readValue("install_dirs");
+  const wanted = select.value || settings.values.install_dir;
+  select.innerHTML = dirs.length
+    ? dirs.map((dir) => `<option value="${esc(dir)}">${esc(dir)}</option>`).join("")
+    : '<option value="">（一覧が空です）</option>';
+  select.value = dirs.includes(wanted) ? wanted : (dirs[0] || "");
+}
+
+function readValue(key) {
+  const field = settings.fields.find((f) => f.key === key);
+  if (field && field.type === "slots") {
+    return [...document.querySelectorAll(`[data-slot="${key}"]`)]
+      .filter((el) => el.checked).map((el) => el.value);
+  }
+  const el = document.querySelector(`[data-key="${key}"]`);
+  if (!el) return settings.values[key];
+  if (el.type === "checkbox") return el.checked;
+  if (field && field.type === "list") {
+    return el.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  }
+  return el.value;
+}
+
+// 「カバーを作り直す」。設定を切り替えたあと、登録し直さずに反映させる。
+let coverTimer = null;
+
+$("settings-body").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-action]");
+  if (!button || button.dataset.action !== "rebuild_covers") return;
+
+  if (settingsAreDirty() && !confirm(
+      "未保存の変更があります。保存した内容で作り直しますが、よろしいですか?")) {
+    return;
+  }
+
+  button.disabled = true;
+  setCoverNote("作り直しています…");
+  try {
+    await call("/api/steam/covers/rebuild", { method: "POST" });
+    pollCovers();
+  } catch (error) {
+    button.disabled = false;
+    setCoverNote(error.message, true);
+  }
+});
+
+function setCoverNote(text, bad) {
+  const note = document.querySelector('[data-action-note="rebuild_covers"]');
+  if (!note) return;
+  note.textContent = text || "";
+  note.classList.toggle("ng", Boolean(bad));
+}
+
+async function pollCovers() {
+  if (coverTimer) { clearTimeout(coverTimer); coverTimer = null; }
+
+  let task;
+  try {
+    task = await call("/api/steam/covers");
+  } catch (error) {
+    setCoverNote(error.message, true);
+    return;
+  }
+
+  const button = document.querySelector('[data-action="rebuild_covers"]');
+  if (task.running) {
+    setCoverNote(`作り直しています… ${task.done} / ${task.total}`);
+    coverTimer = setTimeout(pollCovers, 700);
+    return;
+  }
+
+  if (button) button.disabled = false;
+  setCoverNote(task.message + (task.errors.length
+    ? `　※ ${task.errors.length} 件で問題がありました: ${task.errors[0]}`
+    : ""), task.errors.length > 0);
+}
+
+$("settings-reload").onclick = loadSettings;
+
+/**
+ * 画面から設定値を集める。
+ *
+ * 保存にも、未保存かどうかの判定にも同じものが要る。別々に書くと、
+ * 項目の扱いを変えたときに片方だけ直して食い違う。
+ */
+function collectSettings() {
+  const values = {};
+  settings.fields.forEach((f) => {
+    if (f.type === "action") return;   // 操作であって設定値ではない
+    values[f.key] = readValue(f.key);
+  });
+  return values;
+}
+
+$("settings-save").onclick = async () => {
+  if (!settings) return;
+  const values = collectSettings();
+
+  $("settings-save").disabled = true;
+  try {
+    const result = await call("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+    notice("");
+    // 保存できたので、ここを新しい基準にする
+    markSettingsSaved();
+    $("result").textContent = `設定を保存しました: ${result.saved}` +
+      (result.external.length
+        ? `　※ ${result.external.join(" / ")} はプロジェクトの外にあります`
+        : "")
+      + ((result.warnings || []).length ? `　⚠ ${result.warnings.join(" / ")}` : "");
+    $("result").style.display = "block";
+    settings.values = { ...settings.values, ...values };
+    // 一覧の取り直しは時間がかかるので待たない (画面の操作を止めないため)
+    load(true).catch(() => {});
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    $("settings-save").disabled = false;
+  }
+};
+
+// ---- まとめて取得 --------------------------------------------------
+$("download-visible").onclick = async () => {
+  const targets = visibleItems().filter((item) => !item.installed || item.outdated);
+  if (!targets.length) { notice("表示中に取得対象がありません。"); return; }
+  if (!confirm(`${targets.length} 件を ${chosenInstallDir()} に取得します。よろしいですか?`)) return;
+
+  for (const item of targets) {
+    try {
+      await call("/api/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ work_id: item.id, install_dir: chosenInstallDir() }),
+      });
+    } catch (error) { notice(error.message); break; }
+  }
+  pollJobs();
+};
+
+let pollTimer = null;
+// 進行中のジョブ。行のボタンの見た目もこれで決める。
+let jobsByWork = {};
+// 終わったと分かっているジョブ。1 件終わるたびに一覧を取り直すために使う。
+let finishedJobs = new Set();
+// 最初の見回りで拾った「既に終わっていたもの」は、取り直しの合図にしない。
+let jobsPrimed = false;
+// 見回りの世代。呼び直されたら古い方は降りる。
+let pollGeneration = 0;
+
+function jobPercent(job) {
+  return job.ratio == null ? null : Math.round(job.ratio * 100);
+}
+
+// 上部に貼り付けるのは 1 件だけ。動いているものを優先し、
+// 無ければ直前に終わったものを出して結果を見せる。
+function pickJob(jobs) {
+  return jobs.find((job) => job.status === "running")
+    || jobs.find((job) => job.status !== "running")
+    || null;
+}
+
+function renderJob(job, queued) {
+  if (!job) return "";
+  const percent = jobPercent(job);
+  const running = job.status === "running";
+  const waiting = queued > 0
+    ? `<span class="muted">ほかに ${queued} 件が順番待ち</span>` : "";
+  const line = running
+    ? `${job.current || "準備中"} ${job.written_label}${
+        job.total ? " / " + job.total_label : ""}${percent == null ? "" : ` (${percent}%)`}`
+    : job.message;
+
+  const cancel = running && job.cancellable && !job.cancel_requested
+    ? `<button data-cancel="${job.id}">中止</button>`
+    : running
+      ? `<button disabled title="展開中は中止できません">中止</button>`
+      : "";
+
+  return `<div class="job ${job.status}">
+    ${running ? '<div class="spinner"></div>' : ""}
+    <div class="job-body">
+      <b>${esc(job.title)}</b>
+      <span class="muted">${esc(job.work_id)} ・ ${job.elapsed}s</span> ${waiting}
+      <div>${esc(line ?? "")}</div>
+      ${running
+        ? `<div class="bar"><div style="width:${percent || 0}%"></div></div>` : ""}
+    </div>
+    ${cancel}
+  </div>`;
+}
+
+async function pollJobs() {
+  // 取得ボタンなどからも直接呼ばれる。待機中のタイマーを止めずに始めると
+  // 見回りが 1 本ずつ増え、押すたびに再描画が速くなっていく。
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+
+  // 応答待ちの間に呼び直されることもある。待機中のタイマーを消すだけでは
+  // 追いつかないので、世代を振って「最新の 1 本」だけを残す。
+  const generation = ++pollGeneration;
+  const outdated = () => generation !== pollGeneration;
+
+  try {
+    const payload = await call("/api/jobs");
+    if (outdated()) return;
+    // 順番待ちが残っているうちは、走っていなくても見張り続ける
+    const active = payload.running > 0 || payload.queued > 0;
+
+    jobsByWork = {};
+    let newlyFinished = false;
+    payload.jobs.forEach((job) => {
+      if (job.status === "running" || job.status === "queued") {
+        jobsByWork[job.work_id] = job;
+      } else if (!finishedJobs.has(job.id)) {
+        finishedJobs.add(job.id);
+        // 最初の見回りで見つかった分は、既に load() 済みの内容に含まれている
+        if (jobsPrimed) newlyFinished = true;
+      }
+    });
+    jobsPrimed = true;
+
+    $("jobs").innerHTML = renderJob(pickJob(payload.jobs), payload.queued);
+
+    // 1 件終わるごとに一覧を取り直す。取り直さないと導入済みかどうかが
+    // 古いままで、終わった作品の行が「取得」に戻って見える。
+    if (newlyFinished) await load(false);
+    else render();
+
+    if (outdated()) return;
+    if (active) {
+      pollTimer = setTimeout(pollJobs, 700);
+    } else {
+      pollTimer = null;
+    }
+  } catch (error) { showFailure(error); }
+}
+
+load(false).then(pollJobs);
+// ---- DLC を重ねる --------------------------------------------------
+// DLsite の API には DLC を示す情報が無いので、関係は利用者が宣言する。
+// 重ね方も作品ごとに違う (方向が逆で、本編の一部だけを使うものもある) ため、
+// 「どの作品のどのパスを、どの作品のどのパスへ」の 4 項目で指定する。
+let linkWork = null;
+let linkCandidates = [];
+let linkExisting = [];
+
+/** 既にある結び付けのうち、いま開いている作品が絡むものを並べる。 */
+function renderLinkExisting() {
+  const box = $("link-existing");
+  const mine = !linkWork ? [] : linkExisting.filter(
+    (x) => x.source_id === linkWork.work_id || x.target_id === linkWork.work_id);
+  if (!mine.length) { box.innerHTML = ""; return; }
+
+  box.innerHTML = '<div class="muted">この作品の結び付け</div>' + mine.map((x) => {
+    const when = x.applied_at ? `適用 ${esc(x.applied_at)}` : "未適用";
+    // 退避が無いものは戻しようがないので押させない
+    const revert = x.has_backup
+      ? `<button data-link-revert="${esc(x.key)}">書き戻す</button>`
+      : `<button disabled title="退避されたファイルがありません">書き戻す</button>`;
+    return `<div class="link-row"><span>${esc(x.source_title)} → ${esc(x.target_title)}`
+      + `<br><span class="muted">${when}${x.note ? " / " + esc(x.note) : ""}</span></span>`
+      + `<span class="row-actions">${revert}`
+      + `<button data-link-drop="${esc(x.key)}">記録を外す</button></span></div>`;
+  }).join("");
+}
+
+async function loadLinkExisting() {
+  // 一覧が取れなくても重ねる操作自体はできる。黙って畳む。
+  try {
+    linkExisting = (await call("/api/links")).links;
+  } catch (error) { linkExisting = []; }
+  renderLinkExisting();
+}
+
+function renderLinkOthers() {
+  const showAll = $("link-all-makers").checked;
+  const list = linkCandidates.filter((c) => showAll || c.same_maker);
+  const previous = $("link-other").value;
+  $("link-other").innerHTML = list.length
+    ? list.map((c) => `<option value="${esc(c.id)}">${esc(c.title)}${
+        c.same_maker ? "" : `（${esc(c.maker || "別の出品者")}）`}</option>`).join("")
+    : `<option value="">該当なし</option>`;
+  if (list.some((c) => c.id === previous)) $("link-other").value = previous;
+}
+
+async function openLinkDialog(workId) {
+  notice("");
+  linkWork = null;
+  let info;
+  try {
+    info = await call(`/api/link/candidates?work_id=${encodeURIComponent(workId)}`);
+  } catch (error) { notice(error.message); return; }
+
+  linkWork = info;
+  linkCandidates = info.candidates;
+  $("link-intro").textContent =
+    `${info.title}（${info.maker || "出品者不明"}）。同じ出品者の導入済み作品は ${
+      info.same_maker_count} 件です。`;
+  $("link-all-makers").checked = info.same_maker_count === 0;
+  renderLinkOthers();
+  $("link-source-path").value = "";
+  $("link-target-path").value = "";
+  $("link-direction").value = "into-other";
+  $("link-mode").value = "copy";
+  $("link-preview").textContent = "";
+  $("link-submit").disabled = true;
+  $("link-existing").innerHTML = "";
+  $("link-dialog").showModal();
+  await loadLinkExisting();
+}
+
+/** 画面の入力を、API に渡す 4 項目に組み直す。 */
+function currentLink() {
+  const other = $("link-other").value;
+  if (!linkWork || !other) return null;
+  const intoOther = $("link-direction").value === "into-other";
+  return {
+    source_id: intoOther ? linkWork.work_id : other,
+    target_id: intoOther ? other : linkWork.work_id,
+    source_path: $("link-source-path").value.trim(),
+    target_path: $("link-target-path").value.trim(),
+    mode: $("link-mode").value,
+  };
+}
+
+$("link-all-makers").onchange = renderLinkOthers;
+$("link-cancel").onclick = () => $("link-dialog").close();
+
+// 結び付けは添字ではなく key で指す。1 件外すと以降の添字がずれるため。
+$("link-existing").onclick = async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+
+  const revertKey = button.dataset.linkRevert;
+  const dropKey = button.dataset.linkDrop;
+  if (!revertKey && !dropKey) return;
+
+  const message = revertKey
+    ? "重ねる前のファイルを書き戻します。\n\n"
+      + "DLC が新しく置いたファイルは残ります（退避の中身だけでは"
+      + "どれが DLC 由来か区別できないためです）。"
+    : "結び付けの記録だけを消します。\n\n"
+      + "既に重ねたファイルは相手の作品に残ったままです。";
+  if (!confirm(message)) return;
+
+  button.disabled = true;
+  try {
+    const r = await call(revertKey ? "/api/link/revert" : "/api/link/remove", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: revertKey || dropKey }),
+    });
+    notice(r.message);
+    await loadLinkExisting();
+  } catch (error) { notice(error.message); button.disabled = false; }
+};
+["link-other", "link-direction", "link-source-path", "link-target-path"].forEach((id) => {
+  $(id).addEventListener("input", () => { $("link-submit").disabled = true; });
+});
+
+$("link-preview-btn").onclick = async () => {
+  const body = currentLink();
+  if (!body) { notice("相手の作品を選んでください。"); return; }
+  $("link-preview").textContent = "調べています…";
+  try {
+    const r = await call("/api/link/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const warn = r.overwrite_count > 0
+      ? `<div class="ng">${r.overwrite_count} 個のファイルが上書きされます（退避してから置き換えます）</div>`
+      : `<div>上書きは起きません。すべて新規です。</div>`;
+    $("link-preview").innerHTML = `${warn}
+      <div>追加 ${r.addition_count} 個 / 合計 ${esc(r.total_label)}</div>
+      <div class="muted">${esc(r.source)}<br>→ ${esc(r.target)}</div>`;
+    $("link-submit").disabled = false;
+  } catch (error) {
+    $("link-preview").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
+    $("link-submit").disabled = true;
+  }
+};
+
+$("link-submit").onclick = async () => {
+  const body = currentLink();
+  if (!body) return;
+  $("link-submit").disabled = true;
+  try {
+    const r = await call("/api/link/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ backup: true }, body)),
+    });
+    $("link-dialog").close();
+    notice(r.message);
+    await load(false);
+  } catch (error) { notice(error.message); $("link-submit").disabled = false; }
+};
+
+// ---- フォルダを選ぶ ------------------------------------------------
+let browseState = null;
+
+async function openBrowse(workId, startPath, onPick) {
+  browseState = { workId, path: startPath || "", onPick };
+  await renderBrowse();
+  $("browse-dialog").showModal();
+}
+
+async function renderBrowse() {
+  const { workId, path } = browseState;
+  let r;
+  try {
+    r = await call(`/api/browse?work_id=${encodeURIComponent(workId)}&path=${
+      encodeURIComponent(path)}`);
+  } catch (error) {
+    $("browse-list").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
+    return;
+  }
+
+  browseState.path = r.relative;
+  $("browse-where").textContent = r.relative ? `/${r.relative}` : "（作品の直下）";
+  const up = r.relative ? `<div><button data-up="1">.. 上へ</button></div>` : "";
+  const dirs = r.directories.map((d) =>
+    `<div><button data-dir="${esc(d.relative)}">${esc(d.name)}</button></div>`).join("");
+  const files = r.files.slice(0, 40).map((f) =>
+    `<div class="muted">${esc(f.name)} <span>${esc(f.size_label)}</span></div>`).join("");
+  $("browse-list").innerHTML = up + dirs +
+    (files ? `<div class="muted" style="margin-top:6px">ファイル:</div>${files}` : "");
+}
+
+$("browse-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button || !browseState) return;
+  if (button.dataset.up !== undefined) {
+    const parts = browseState.path.split("/").filter(Boolean);
+    parts.pop();
+    browseState.path = parts.join("/");
+  } else if (button.dataset.dir !== undefined) {
+    browseState.path = button.dataset.dir;
+  } else return;
+  await renderBrowse();
+});
+
+$("browse-cancel").onclick = () => $("browse-dialog").close();
+$("browse-choose").onclick = () => {
+  if (browseState && browseState.onPick) browseState.onPick(browseState.path);
+  $("browse-dialog").close();
+};
+
+$("link-pick-source").onclick = () => {
+  const body = currentLink();
+  if (!body) { notice("相手の作品を選んでください。"); return; }
+  openBrowse(body.source_id, $("link-source-path").value.trim(), (picked) => {
+    $("link-source-path").value = picked;
+    $("link-submit").disabled = true;
+  });
+};
+
+$("link-pick-target").onclick = () => {
+  const body = currentLink();
+  if (!body) { notice("相手の作品を選んでください。"); return; }
+  openBrowse(body.target_id, $("link-target-path").value.trim(), (picked) => {
+    $("link-target-path").value = picked;
+    $("link-submit").disabled = true;
+  });
+};
+
+// ---- パッチを当てる ------------------------------------------------
+// 特典セットのように 1 作品に 12 個の exe が入っていることがある。
+// フォルダ名まで見せて 1 つずつ選べるようにする。
+let patchWork = null;
+
+async function openPatchDialog(workId) {
+  notice("");
+  patchWork = null;
+  let info;
+  try {
+    info = await call(`/api/patches?work_id=${encodeURIComponent(workId)}`);
+  } catch (error) { notice(error.message); return; }
+
+  patchWork = info;
+  const targets = info.targets.filter((t) => t.registered);
+  $("patch-target").innerHTML = targets.length
+    ? targets.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${
+        t.same_maker ? "" : "（別の出品者）"}</option>`).join("")
+    : `<option value="">Steam に登録済みのゲームがありません</option>`;
+  if (targets.some((t) => t.id === workId)) $("patch-target").value = workId;
+
+  renderPatchList();
+  $("patch-output").textContent = "";
+  $("patch-dialog").showModal();
+}
+
+function renderPatchList() {
+  if (!patchWork) return;
+  $("patch-list").innerHTML = patchWork.patches.length
+    ? patchWork.patches.map((p) => `<div>
+        <button data-run="${esc(p.relative)}">${p.applied ? "再実行" : "実行"}</button>
+        <span>${esc(p.relative)}</span>
+        <span class="muted">${esc(p.size_label)}${p.applied ? " ・実行済み" : ""}</span>
+      </div>`).join("")
+    : `<div class="muted">実行できる exe が見つかりませんでした。</div>`;
+}
+
+$("patch-cancel").onclick = () => $("patch-dialog").close();
+
+$("patch-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-run]");
+  if (!button || !patchWork) return;
+  const targetId = $("patch-target").value;
+  if (!targetId) { notice("当てる先のゲームを選んでください。"); return; }
+
+  const relative = button.dataset.run;
+  button.disabled = true;
+  $("patch-output").textContent = `${relative} を実行しています…（画面が出たら操作してください）`;
+  try {
+    const r = await call("/api/patch/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ work_id: patchWork.work_id, relative, target_id: targetId }),
+    });
+    $("patch-output").innerHTML = `<div class="${r.ok ? "" : "ng"}">${esc(r.message)}</div>
+      <div class="muted">Proton: ${esc(r.proton)}</div>
+      ${r.output ? `<pre class="muted" style="white-space:pre-wrap">${esc(r.output)}</pre>` : ""}`;
+    const found = patchWork.patches.find((p) => p.relative === relative);
+    if (found && r.ok) found.applied = true;
+    renderPatchList();
+  } catch (error) {
+    $("patch-output").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
+    renderPatchList();
+  }
+});
+
+// ---- Proton 設定 ---------------------------------------------------
+// 書き込む先は Steam 自身の config.vdf の CompatToolMapping。設定画面から
+// 変えたときと同じ場所・同じ形なので、効果も同じ。
+// ただし Steam は config.vdf を抱えたまま動き、終了時に書き戻す。
+// 起動中の変更は捨てられるので、その間は操作させない。
+let protonData = null;
+
+async function loadProton() {
+  const body = $("proton-body");
+  body.innerHTML = '<p class="muted">読み込み中…</p>';
+  try {
+    protonData = await call("/api/proton");
+  } catch (error) {
+    body.innerHTML = `<p class="ng">${esc(error.message)}</p>`;
+    return;
+  }
+  setSteamRunning(protonData.steam_running);
+  renderProton();
+}
+
+function renderProton() {
+  if (!protonData) return;
+  // 帯と同じ状態を見る。片方だけ古いと、押せるのに失敗する状態になる。
+  const running = steamRunning;
+  $("proton-note").innerHTML = running
+    ? `<span class="ng">Steam 起動中のため変更できません。</span>`
+    : `${protonData.games.length} 件。既定は ${esc(protonData.default_tool)}`;
+
+  const mode = $("proton-filter").value;
+  const term = $("proton-search").value.trim().toLowerCase();
+  const games = protonData.games.filter((g) => {
+    if (mode === "assigned" && !g.tool) return false;
+    if (mode === "unset" && g.tool) return false;
+    if (term && !g.title.toLowerCase().includes(term)
+        && !g.work_id.toLowerCase().includes(term)) return false;
+    return true;
+  });
+
+  sortProtonGames(games);
+
+  if (!games.length) {
+    $("proton-body").innerHTML = '<p class="muted">該当するゲームがありません。</p>';
+    return;
+  }
+
+  const options = (selected) => protonData.tools.map((t) =>
+    `<option value="${esc(t.value)}"${t.value === selected ? " selected" : ""}>${
+      esc(t.label)}</option>`).join("");
+
+  $("proton-body").innerHTML = `<table>
+    <thead><tr><th>作品</th><th>現在の Proton</th><th>変更</th></tr></thead>
+    <tbody>${games.map((g) => {
+      // 一覧に無い名前 (消した GE-Proton など) は選択肢に足して見せる
+      const extra = g.missing_tool
+        ? `<option value="${esc(g.tool)}" selected>${esc(g.tool)}（見つかりません）</option>`
+        : "";
+      return `<tr>
+        <td>${esc(g.title)}<div class="muted">${esc(g.work_id)}${
+          g.maker ? " ・ " + esc(g.maker) : ""}${
+          g.has_prefix ? "" : ' ・ <span title="一度起動すると作られます">未起動</span>'}</div></td>
+        <td>${g.tool
+          ? `<span class="${g.missing_tool ? "ng" : ""}">${esc(g.tool_label)}</span>`
+          : '<span class="muted">（未設定）</span>'}</td>
+        <td><select data-proton-for="${esc(g.work_id)}"${running ? " disabled" : ""}>
+          ${extra}${options(g.tool)}
+        </select></td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+// 並べ替え。ライブラリ画面と同じ規則にする:
+// 第 2 キーはタイトル、値が無いものは向きに関わらず末尾。
+let protonDescending = false;
+
+function sortProtonGames(games) {
+  const key = $("proton-sort").value;
+  games.sort((a, b) => {
+    if (key === "title") {
+      return protonDescending ? -byTitle(a, b) : byTitle(a, b);
+    }
+    // 未設定は昇順でも降順でも末尾に置く
+    if (!a.tool && !b.tool) return byTitle(a, b);
+    if (!a.tool) return 1;
+    if (!b.tool) return -1;
+    // 表示名で比べる。利用者が画面で見ている並びと一致させるため。
+    const result = String(a.tool_label).localeCompare(String(b.tool_label), "ja");
+    if (result !== 0) return protonDescending ? -result : result;
+    return byTitle(a, b);
+  });
+}
+
+$("proton-sort").onchange = renderProton;
+$("proton-order").onclick = () => {
+  protonDescending = !protonDescending;
+  $("proton-order").textContent = protonDescending ? "降順" : "昇順";
+  renderProton();
+};
+
+$("proton-reload").onclick = loadProton;
+$("proton-filter").onchange = renderProton;
+$("proton-search").oninput = renderProton;
+
+$("proton-body").addEventListener("change", async (event) => {
+  const select = event.target.closest("select[data-proton-for]");
+  if (!select || !protonData) return;
+
+  const workId = select.dataset.protonFor;
+  const tool = select.value;
+  // 一覧を開いたまま Steam を起動していることがある。書く前に確かめる。
+  if (!(await ensureSteamStopped())) return;
+  select.disabled = true;
+  notice("");
+  try {
+    const r = await call("/api/proton/set", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ work_id: workId, tool }),
+    });
+    notice(r.message);
+    // 表示中の値も合わせておく (再読み込みを待たずに反映する)
+    const game = protonData.games.find((g) => g.work_id === workId);
+    if (game) {
+      game.tool = r.tool;
+      const found = protonData.tools.find((t) => t.value === r.tool);
+      game.tool_label = found ? found.label : r.tool;
+      game.missing_tool = false;
+    }
+    renderProton();
+  } catch (error) {
+    notice(error.message);
+    select.disabled = false;
+    // 失敗したら見えている選択を元に戻す
+    renderProton();
+  }
+});
+
+// ---- Steam の起動状態 ----------------------------------------------
+// Steam は config.vdf / shortcuts.vdf を抱えたまま動き、終了時に書き戻す。
+// 起動中に書き換えても捨てられるので、その間の操作は塞ぐ。
+let steamRunning = false;
+//: ゲームモードでは false。Steam を終了する手段が無い。
+let canQuitSteam = true;
+
+function setSteamRunning(running, note) {
+  const changed = steamRunning !== running;
+  steamRunning = running;
+  $("steam-banner").classList.toggle("show", running);
+  // 帯が出入りすると見出しの高さが変わる
+  syncHeaderHeight();
+
+  // ゲームモードでは Steam を終了できない (Steam 自身がセッションで、
+  // このツールもそこから起動されている)。「終了しました」は押しても
+  // 永遠に成立しないので、案内ごと差し替える。
+  $("steam-banner-text").textContent = canQuitSteam
+    ? "Steam 起動中のため設定できない項目があります"
+    : "ゲームモードのため設定できない項目があります。Desktop Mode に切り替えてください";
+  // ゲームモードではどちらも出さない (終了するとツールごと落ちる)
+  $("steam-stop").hidden = !canQuitSteam;
+  $("steam-recheck").hidden = !canQuitSteam;
+  $("steam-recheck-note").textContent = running && canQuitSteam ? (note || "") : "";
+  if (changed) {
+    // ボタンの有効・無効は描画時に決めている。状態が変わったら描き直す。
+    // (load() の中から呼ぶ場合はこの後どのみち render() が走る)
+    if (data) render();
+    if (protonData && !$("view-proton").hidden) renderProton();
+  }
+}
+
+/** 実際のプロセスを見に行く。塞いだままにしないための確認手段。 */
+async function refreshSteamState(fromButton) {
+  try {
+    const r = await call("/api/steam/state");
+    canQuitSteam = r.can_quit_steam !== false;
+    setSteamRunning(
+      r.running,
+      fromButton && r.running ? "まだ起動しています。終了してからもう一度押してください。" : ""
+    );
+    return r.running;
+  } catch (error) {
+    notice(error.message);
+    return steamRunning;
+  }
+}
+
+$("steam-recheck").onclick = async () => {
+  const button = $("steam-recheck");
+  button.disabled = true;
+  $("steam-recheck-note").textContent = "確認しています…";
+  await refreshSteamState(true);
+  button.disabled = false;
+};
+
+// Steam に終了を頼む。手で終わらせてもらう手間を省くだけで、やることは同じ。
+$("steam-stop").onclick = async () => {
+  if (!confirm("Steam を終了します。\n\n"
+               + "起動中のゲームがあれば、先に終了してください。\n"
+               + "よろしいですか?")) return;
+
+  const stop = $("steam-stop");
+  const recheck = $("steam-recheck");
+  stop.disabled = true;
+  recheck.disabled = true;
+  $("steam-recheck-note").textContent = "終了しています…（少し時間がかかります）";
+
+  try {
+    const result = await call("/api/steam/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    setSteamRunning(result.running, result.running ? result.message : "");
+    notice(result.running ? result.message : "");
+  } catch (error) {
+    notice(error.message);
+    $("steam-recheck-note").textContent = "";
+  }
+
+  stop.disabled = false;
+  recheck.disabled = false;
+};
+
+/**
+ * Steam を触る操作の前に、実際のプロセスを見てから進む。
+ *
+ * 一覧を開いたまま Steam を起動していることがある。表示が古いまま実行すると
+ * 書き換えが Steam 終了時に捨てられるので、直前に必ず確かめる。
+ * 起動していたら false を返し、画面を起動中の表示に切り替える。
+ */
+async function ensureSteamStopped() {
+  const running = await refreshSteamState(false);
+  if (running) {
+    notice(canQuitSteam
+      ? "Steam が起動中のため中断しました。終了してからやり直してください。"
+      : "ゲームモードのため中断しました。Desktop Mode に切り替えて操作してください。");
+  }
+  return !running;
+}
+
+// ---- 終了 ----------------------------------------------------------
+// バックグラウンドで待ち受けているプロセスを畳んでから、タブを閉じる。
+// 閉じるのはブラウザ側の許可が要るので、閉じられなかった場合に備えて
+// 「終了した」ことが分かる表示を残す。
+function showVeil(html) {
+  $("shutdown-text").innerHTML = html;
+  $("shutdown-veil").classList.add("show");
+}
+
+/** 待ち受けが本当に落ちたか、応答が返らなくなるまで確かめる。 */
+async function waitUntilStopped(attempts = 20) {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      // no-store と cache: "no-store" で、キャッシュ済みの応答を掴まないようにする
+      await fetch("/api/steam/state", { cache: "no-store" });
+    } catch (error) {
+      return true;  // 繋がらなくなった = 落ちた
+    }
+  }
+  return false;
+}
+
+$("quit").onclick = async () => {
+  // 取得の途中で落とすと、中途半端なファイルが残る
+  let busy = 0;
+  try {
+    const payload = await call("/api/jobs");
+    busy = (payload.running || 0) + (payload.queued || 0);
+  } catch (error) { /* 数えられなくても終了はできる */ }
+
+  const message = busy
+    ? `取得が ${busy} 件 残っています。
+終了すると中断されます。よろしいですか?`
+    : "このツールを終了します。よろしいですか?";
+  if (!confirm(message)) return;
+
+  $("quit").disabled = true;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  showVeil("終了しています…");
+
+  try {
+    await call("/api/shutdown", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    // 応答を返しきる前に落ちることもある。落ちたかどうかは次で確かめる。
+  }
+
+  const stopped = await waitUntilStopped();
+  if (!stopped) {
+    $("quit").disabled = false;
+    $("shutdown-veil").classList.remove("show");
+    notice("終了できませんでした。端末で Ctrl-C を押して終了してください。");
+    return;
+  }
+
+  showVeil("終了しました。<br>このタブを閉じています…");
+  window.close();
+
+  // script で開いたタブでないと close() は効かない。
+  // このツールはブラウザを外から開くので、多くの場合ここに来る。
+  setTimeout(() => {
+    showVeil("終了しました。<br>このタブは閉じてかまいません。");
+  }, 600);
+};
+
+// ---- 貼り付く操作列 --------------------------------------------------
+// 見出しは幅が狭いと折り返して高さが変わる (SteamDeck の画面では起きやすい)。
+// 固定値で top を決めると、折り返したときに操作列が見出しに潜り込む。
+// 実測して CSS 変数に入れる。
+function syncHeaderHeight() {
+  const header = document.querySelector("header");
+  if (!header) return;
+  document.documentElement.style.setProperty(
+    "--header-h", `${Math.round(header.getBoundingClientRect().height)}px`);
+}
+
+syncHeaderHeight();
+window.addEventListener("resize", syncHeaderHeight);
+
+// 見出しの中身は状態によって変わる (帯の出入り、未登録件数の追記など)。
+// 幅が狭いと折り返して高さも変わる。追随させる。
+//
+// ResizeObserver は「あれば助かる」程度の位置づけ。描画していない環境では
+// コールバックが呼ばれないことがあるので、これだけに頼らず、タブ切り替えや
+// 再描画のたびにも呼び直している。
+// (参照を持たない ResizeObserver は回収されうるので変数に持たせておく)
+let headerObserver = null;
+if (window.ResizeObserver) {
+  const header = document.querySelector("header");
+  if (header) {
+    headerObserver = new ResizeObserver(syncHeaderHeight);
+    headerObserver.observe(header);
+  }
+}
+
+// ---- 置き場が見つからないときの警告 ----------------------------------
+// SteamDeck では展開先を SD カードに置くのが普通で、カードが外れていると
+// 丸ごと見えなくなる。その状態では導入済みの作品が一斉に「記録のみ」になり、
+// 取り直しを促す表示になってしまう。気付けるように上部で知らせる。
+function renderPathWarning(paths) {
+  const box = $("path-banner");
+  if (!paths || !paths.missing || !paths.missing.length) {
+    box.classList.remove("show");
+    box.innerHTML = "";
+    return;
+  }
+
+  const lines = paths.missing.map((m) =>
+    `<div>${esc(m.label)}が見つかりません: <code>${esc(m.path)}</code>${
+      m.record_only ? `（この場所の ${m.record_only} 件が「記録のみ」）` : ""}</div>`);
+
+  const hint = paths.suggest_removable
+    ? '<span class="hint">SD カードが外れているか、マウントされていない可能性があります。'
+      + '取り直す前にカードを確認してください。</span>'
+    : "";
+
+  box.innerHTML = lines.join("") + hint;
+  box.classList.add("show");
+  syncHeaderHeight();
+}
+
+// ---- 設定の未保存を見張る --------------------------------------------
+// 保存ボタンを押さずに他のタブへ移ると、書いた内容が消える。
+let settingsSnapshot = null;
+
+/** 今の入力内容を、比べられる形にまとめる。 */
+function settingsFingerprint() {
+  if (!settings) return null;
+  return JSON.stringify(collectSettings());
+}
+
+function markSettingsSaved() {
+  settingsSnapshot = settingsFingerprint();
+  updateDirtyMark();
+}
+
+function settingsAreDirty() {
+  if (settingsSnapshot === null) return false;
+  const now = settingsFingerprint();
+  return now !== null && now !== settingsSnapshot;
+}
+
+/** 未保存があることを保存ボタンで示す。 */
+function updateDirtyMark() {
+  const button = $("settings-save");
+  if (!button) return;
+  const dirty = settingsAreDirty();
+  button.textContent = dirty ? "保存（未保存の変更あり）" : "保存";
+  button.classList.toggle("dirty", dirty);
+}
+
+/**
+ * 設定画面から離れてよいか尋ねる。
+ *
+ * 破棄して移りたい場合もあるので、止めるのではなく選ばせる。
+ */
+function mayLeaveSettings() {
+  if (!settingsAreDirty()) return true;
+  return confirm(
+    "設定に未保存の変更があります。\n\n"
+    + "このまま移動すると変更は破棄されます。よろしいですか?"
+  );
+}
+
+// 閉じる・再読み込みでも失われるので、ブラウザ標準の確認を出す
+window.addEventListener("beforeunload", (event) => {
+  if (!settingsAreDirty()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+</script>
+</body>
+</html>

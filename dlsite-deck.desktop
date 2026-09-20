@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=DLsite for SteamDeck
+Name[ja]=DLsite for SteamDeck
+Comment=DLsite の購入済み作品をダウンロード・展開する
+Comment[ja]=DLsite の購入済み作品をダウンロード・展開する
+# Exec と Path は設置場所に合わせて書き換えること (絶対パスで指定する。~ は展開されない)。
+# 書き換えたものを ~/.local/share/applications/ に置くとメニューに出る。
+# 手順は docs/usage.md の「アプリケーションメニューに載せる」を参照。
+Exec=/path/to/dlsite_deck/dlsite-deck.sh
+Path=/path/to/dlsite_deck
+Icon=applications-games
+Terminal=true
+Categories=Game;Utility;
