@@ -1,6 +1,6 @@
 """作品種別 (``work_type``) をカテゴリにまとめる。
 
-DLsite の ``work_type`` は細かいので、一覧の絞り込みに使いやすい粒度に畳む。
+DLsite の ``work_type`` は細かいので、一覧の絞り込みに使いやすい粒度にまとめる。
 既定の表示はゲームのみで、それ以外はカテゴリを切り替えて表示する。
 """
 
@@ -28,7 +28,7 @@ class Category:
     label: str
 
 
-#: 表示順に並べたカテゴリ一覧。UI のプルダウンはこの順で並べる。
+#: 表示順に並べたカテゴリ一覧。画面のプルダウンはこの順で並べる。
 CATEGORIES: tuple[Category, ...] = (
     Category(GAME, "ゲーム"),
     Category(MANGA, "マンガ"),
@@ -104,7 +104,3 @@ def classify(work_type: str | None, file_type: str | None = None) -> str:
 def label(key: str) -> str:
     """カテゴリの表示名。"""
     return CATEGORY_LABELS.get(key, key)
-
-
-def is_valid(key: str) -> bool:
-    return key in CATEGORY_LABELS

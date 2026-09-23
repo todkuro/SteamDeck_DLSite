@@ -1,7 +1,7 @@
 """1 作品を取得して展開し、記録するまでの一連の流れ。
 
-CLI と Web UI の両方から使う。以前はそれぞれが同じ手順を持っており、
-片方だけ直して食い違う（実際に展開先の決め方がずれていた）事故があったため、
+コマンドラインと Web UI の両方から使う。以前はそれぞれが同じ手順を持っており、
+片方だけ直して食い違う (実際に展開先の決め方がずれていた) 事故があったため、
 手順そのものはここに一本化してある。
 
 呼び出し側との違いは「経過をどう見せるか」と「中止をどう伝えるか」だけなので、
@@ -42,10 +42,12 @@ class InstallResult:
     created_output: Path | None = None
     #: 見つかった実行ファイル
     executable: Path | None = None
-    #: 単一フォルダを引き上げたか
+    #: 単一ディレクトリを引き上げたか
     flattened: bool = False
     #: バージョン番号を除いた名前の対応
     renamed: list[tuple[Path, Path]] = field(default_factory=list)
+    #: 展開先の外を指していたので取り除いたリンク
+    removed_links: list[str] = field(default_factory=list)
     #: シリアルコード
     serial_numbers: list[tuple[str, str]] = field(default_factory=list)
     #: 展開できる形式だったか
@@ -166,6 +168,7 @@ def install_work(
     result.extracted = True
     result.flattened = extracted.flattened
     result.renamed = extracted.renamed
+    result.removed_links = extracted.removed_links
 
     executables = archive.find_executables(output_dir)
     result.executable = executables[0] if executables else None
@@ -190,11 +193,12 @@ def register_to_steam(
     executable: Path,
     image: bytes | None,
     launch_options: str | None = None,
+    keep_launch_options: bool = False,
 ) -> steam.RegistrationResult:
     """設定どおりの画像を添えて Steam に登録する。
 
-    設定から何を作って何を渡すかの組み立ては、CLI にも UI にも同じものが要る。
-    ここに置いていないと、項目が増えるたびに 3 箇所を直して回ることになる
+    設定から何を作って何を渡すかの組み立ては、コマンドラインにも Web UI にも同じものが要る。
+    ここに置いていないと、項目が増えるたびに 3 か所を直して回ることになる
     (``cover_image`` を足したときに実際そうなった)。
     """
     cover_image, logo = cover.artwork(cfg, title, image, executable)
@@ -208,13 +212,14 @@ def register_to_steam(
         logo=logo,
         compat_tool=cfg.steam_compat_tool,
         cover_image=cover_image,
+        keep_launch_options=keep_launch_options,
     )
 
 
 def discard_partial(result: InstallResult) -> str:
     """中止・失敗したときに、その回で作ったものだけを片付ける。
 
-    既にあった展開先は消さない。取り直しの途中で止めたときに、導入済みの
+    既にあった展開先は消さない。ダウンロードし直す途中で止めたときに、導入済みの
     ゲームまで消してしまわないため。
     """
     freed = 0

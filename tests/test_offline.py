@@ -33,6 +33,7 @@ from dlsite_deck import (  # noqa: E402
     state,
     steam,
     webui,
+    server as deck_server,
 )
 
 
@@ -464,13 +465,13 @@ class WebUiStartupTest(unittest.TestCase):
             return probe.getsockname()[1]
 
     def test_free_port_is_detected(self):
-        self.assertEqual(webui.probe_port("127.0.0.1", self._free_port()), "free")
+        self.assertEqual(deck_server.probe_port("127.0.0.1", self._free_port()), "free")
 
     def test_recognises_our_own_server(self):
         from http.server import ThreadingHTTPServer
 
         backend = object()
-        handler = type("H", (webui.Handler,), {"backend": backend})
+        handler = type("H", (deck_server.Handler,), {"backend": backend})
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         port = server.server_address[1]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -483,7 +484,7 @@ class WebUiStartupTest(unittest.TestCase):
         result = "free"
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            result = webui.probe_port("127.0.0.1", port)
+            result = deck_server.probe_port("127.0.0.1", port)
             if result == "ours":
                 break
             time.sleep(0.05)
@@ -498,7 +499,7 @@ class WebUiStartupTest(unittest.TestCase):
         port = listener.getsockname()[1]
         self.addCleanup(listener.close)
 
-        self.assertEqual(webui.probe_port("127.0.0.1", port, timeout=0.5), "other")
+        self.assertEqual(deck_server.probe_port("127.0.0.1", port, timeout=0.5), "other")
 
     def test_serve_refuses_when_port_is_taken(self):
         listener = socket.socket()
@@ -508,28 +509,28 @@ class WebUiStartupTest(unittest.TestCase):
         self.addCleanup(listener.close)
 
         # 例外ではなく終了コードで知らせる
-        code = webui.serve(config.Config(), host="127.0.0.1", port=port, open_browser=False)
+        code = deck_server.serve(config.Config(), host="127.0.0.1", port=port, open_browser=False)
         self.assertEqual(code, 1)
 
     def test_finds_no_instance_of_itself(self):
         # 自分自身も、自分を起動した親プロセスも数えない
-        found = webui.find_other_instances()
-        skip = webui._ancestors(os.getpid())
+        found = deck_server.find_other_instances()
+        skip = deck_server._ancestors(os.getpid())
         self.assertFalse([pid for pid, _ in found if pid in skip])
 
     def test_identifies_serve_processes_precisely(self):
         # 本物
         self.assertTrue(
-            webui._is_serve_process(["python3", "-m", "dlsite_deck", "serve", "--port", "8765"])
+            deck_server._is_serve_process(["python3", "-m", "dlsite_deck", "serve", "--port", "8765"])
         )
         self.assertTrue(
-            webui._is_serve_process(["python3", "/opt/dlsite_deck/__main__.py", "serve"])
+            deck_server._is_serve_process(["python3", "/opt/dlsite_deck/__main__.py", "serve"])
         )
 
         # timeout などの起動ラッパーは、実際に serve を動かしているので本物扱い。
         # 自分の親である場合は祖先の除外で弾く。
         self.assertTrue(
-            webui._is_serve_process(["timeout", "6", "python3", "-m", "dlsite_deck", "serve"])
+            deck_server._is_serve_process(["timeout", "6", "python3", "-m", "dlsite_deck", "serve"])
         )
 
         # 文字列が混ざっているだけのものは拾わない。
@@ -542,20 +543,20 @@ class WebUiStartupTest(unittest.TestCase):
             ["ssh", "deck", "cd dlsite_deck && cp serve.py ."],
         ):
             with self.subTest(args=args):
-                self.assertFalse(webui._is_serve_process(args))
+                self.assertFalse(deck_server._is_serve_process(args))
 
 
 class WebUiHostTest(unittest.TestCase):
     def test_recognises_loopback(self):
         for host in ("127.0.0.1", "localhost", "::1", "127.0.1.1", ""):
             with self.subTest(host=host):
-                self.assertTrue(webui._is_loopback(host))
+                self.assertTrue(deck_server._is_loopback(host))
 
     def test_recognises_external(self):
         # 外部に開く指定は警告の対象。認証機構が無いため。
         for host in ("0.0.0.0", "192.168.1.10", "::", "example.local"):
             with self.subTest(host=host):
-                self.assertFalse(webui._is_loopback(host))
+                self.assertFalse(deck_server._is_loopback(host))
 
 
 class CookieTest(unittest.TestCase):

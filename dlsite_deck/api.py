@@ -37,14 +37,13 @@ CONTENT_WORKS_URL = "https://play.dlsite.com/api/v3/content/works"
 DOWNLOAD_URL = "https://play.dlsite.com/api/v3/download"
 LOGIN_SKIP_URL = "https://www.dlsite.com/home/login/=/skip_register/1"
 LOGIN_FINISH_URL = "https://www.dlsite.com/home/login/finish"
-PUBLIC_PRODUCT_URL = "https://www.dlsite.com/home/api/=/product.json"
 HOME_SERIAL_URL = "https://www.dlsite.com/home/serial/=/product_id/"
 
 DEFAULT_WORKS_BATCH_LIMIT = 50
 MAX_DOWNLOAD_REDIRECTS = 8
 DOWNLOAD_PAGE_BODY_LIMIT = 512 * 1024
 
-# ブラウザから借りたセッションを使うので、UA もブラウザ相当に揃えておく
+# ブラウザから借りたセッションを使うので、UA もブラウザ相当にそろえておく
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -65,7 +64,7 @@ class DownloadUnavailableError(DlsiteApiError):
 
 @dataclass
 class RawResponse:
-    """リダイレクトを追わずに受け取った生のレスポンス。"""
+    """リダイレクトを追わずに受け取った、そのままの応答。"""
 
     url: str
     status: int
@@ -111,7 +110,7 @@ class Work:
 
     @property
     def english_title(self) -> str | None:
-        """英字タイトル。ローマ字ディレクトリ名の第一候補に使う。"""
+        """英字タイトル。pykakasi が使えないとき、ローマ字の代わりにディレクトリ名に使う。"""
         return self.names.get("en_US") or None
 
     @property
@@ -207,7 +206,7 @@ class DownloadPlan:
 
 
 class DlsiteClient:
-    """DLsite Play の API を叩くクライアント。"""
+    """DLsite Play の API を呼ぶクライアント。"""
 
     def __init__(
         self,
@@ -219,11 +218,7 @@ class DlsiteClient:
         self.user_agent = user_agent
         self.timeout = timeout
         self._works_batch_limit = DEFAULT_WORKS_BATCH_LIMIT
-        # リダイレクトは Location を検査したいので自動追従させない
-        self._opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(cookie_jar),
-            _NoRedirect(),
-        )
+        self._opener = _https_only_opener(cookie_jar)
 
     # ------------------------------------------------------------------
     # 低レベル HTTP
@@ -238,10 +233,11 @@ class DlsiteClient:
         headers: dict[str, str] | None = None,
         body_limit: int | None = None,
     ) -> RawResponse:
-        """リダイレクトを追わずに 1 回だけリクエストする。"""
+        """リダイレクトを追わずに 1 回だけ要求を出す。"""
         if params:
             separator = "&" if urllib.parse.urlparse(url).query else "?"
             url = url + separator + urllib.parse.urlencode(params)
+        url = secure_url(url)
 
         data = None
         request_headers = {
@@ -305,7 +301,7 @@ class DlsiteClient:
         )
 
     def refresh_session(self) -> bool:
-        """`play.dlsite.com` 側のセッションを張り直す。
+        """`play.dlsite.com` 側のセッションをつなぎ直す。
 
         `www.dlsite.com` のログイン Cookie は長寿命だが、Play API のセッションは
         短命で先に切れる (実測で確認済み)。ブラウザでのログイン直後と同じ OAuth
@@ -332,7 +328,7 @@ class DlsiteClient:
             return False
 
     def ensure_session(self) -> bool:
-        """セッションが無効なら一度だけ張り直しを試みる。"""
+        """セッションが無効なら一度だけつなぎ直しを試みる。"""
         if self.validate_session():
             return True
         return self.refresh_session()
@@ -371,7 +367,7 @@ class DlsiteClient:
     def works(self, ids: Iterable[str]) -> list[Work]:
         """作品 ID からメタデータをまとめて取得する。
 
-        1 リクエストあたりの件数上限はサーバー側の設定に従い、超過が判明したら
+        1 回の要求あたりの件数上限はサーバー側の設定に従い、超過が判明したら
         上限を下げて全体をやり直す。
         """
         ids = list(dict.fromkeys(ids))
@@ -550,20 +546,20 @@ class DlsiteClient:
         return None
 
     def open_stream(self, url: str, start: int | None = None):
-        """ダウンロード用のレスポンスを開く。``start`` 指定でレジュームする。
+        """ダウンロード用の応答を開く。``start`` を指定すると、続きから再開する。
 
         戻り値は ``http.client.HTTPResponse``。呼び出し側で close すること。
         """
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "*/*",
-            # ダウンロード本体は圧縮させない (サイズ計算とレジュームが狂うため)
+            # ダウンロード本体は圧縮させない (サイズの計算と、続きからの再開が狂うため)
             "Accept-Encoding": "identity",
         }
         if start:
             headers["Range"] = f"bytes={start}-"
 
-        current = url
+        current = secure_url(url)
         for _ in range(MAX_DOWNLOAD_REDIRECTS):
             request = urllib.request.Request(current, headers=headers, method="GET")
             try:
@@ -577,7 +573,9 @@ class DlsiteClient:
                         raise DlsiteApiError(
                             f"リダイレクト先が示されていません: {current}"
                         ) from error
-                    current = urllib.parse.urljoin(current, location)
+                    # リダイレクト先も同じく HTTPS に限る。ここで http に
+                    # 落とされると、ログイン Cookie が平文で流れる。
+                    current = secure_url(urllib.parse.urljoin(current, location))
                     continue
 
                 with error:
@@ -610,6 +608,53 @@ class _BatchLimitExceeded(Exception):
     def __init__(self, limit: int | None) -> None:
         super().__init__(limit)
         self.limit = limit
+
+
+def secure_url(url: str) -> str:
+    """HTTPS の URL にして返す。HTTPS にできない形式は断る。
+
+    DLsite のログインを保つ Cookie (``__DLsite_SID`` など) は、DLsite 側の設定で
+    Secure 指定が無い。http で DLsite に接続すると、これが暗号化されずに送られ、
+    公衆 Wi-Fi などで盗み見られればアカウントを乗っ取られる。
+
+    こちらが使う URL はすべて https だが、DLsite のページから拾うダウンロード
+    リンク、リダイレクト先、API が返す画像の URL は DLsite 次第。そこに http が
+    混ざっても平文では送らないよう、http は https に置き換える。``file:`` や
+    ``ftp:`` など、それ以外の形式は開かない (手元のファイルを読まされないため)。
+    """
+    parsed = urllib.parse.urlsplit(url.strip())
+    scheme = parsed.scheme.lower()
+    if parsed.hostname:
+        if scheme == "https":
+            return url.strip()
+        if scheme == "http":
+            return urllib.parse.urlunsplit(("https",) + tuple(parsed)[1:])
+    raise DlsiteApiError(f"HTTPS で開けない URL は開きません: {url[:200]}")
+
+
+def _https_only_opener(cookie_jar: CookieJar) -> urllib.request.OpenerDirector:
+    """HTTPS しか扱えない通信の部品を組み立てる。
+
+    ``build_opener()`` は http・ftp・file・data も扱える部品を自動で足す。
+    :func:`secure_url` を通り抜けた URL があっても接続できないよう、
+    ここでは HTTPS に要るものだけを手で並べる。扱えない形式は
+    ``UnknownHandler`` が断る。
+
+    リダイレクトは Location を検査したいので自動では追わない (``_NoRedirect``)。
+    プロキシの環境変数は従来どおり効く (``ProxyHandler``)。
+    """
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(),
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        _NoRedirect(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPCookieProcessor(cookie_jar),
+    ):
+        opener.add_handler(handler)
+    return opener
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -655,7 +700,7 @@ def _detect_works_batch_limit(response: RawResponse) -> int | None:
     """件数上限超過のエラーかどうかを判定し、上限値を取り出す。"""
     text = response.text(2048)
     if not re.search(r"limit|too\s*many|上限|多すぎ", text, re.IGNORECASE):
-        # ヘッダ側に上限が示されることもある
+        # ヘッダー側に上限が示されることもある
         header = response.headers.get("x-page-limit") or response.headers.get("x-limit")
         return int(header) if header and header.isdigit() else None
 
@@ -698,7 +743,7 @@ def extract_version(title: str) -> str | None:
 
     ``upgrade_date`` が取れない作品でも、タイトルに版が書かれていれば
     更新の手がかりになる。複数見つかった場合は最後のものを採る
-    （「Ver1.0 の続編 Ver2.0」のような並びでは後ろが本体の版であることが多い）。
+    (「Ver1.0 の続編 Ver2.0」のような並びでは後ろが本体の版であることが多い)。
     """
     if not title:
         return None
@@ -707,7 +752,7 @@ def extract_version(title: str) -> str | None:
     if not found:
         return None
 
-    # 表記ゆれを吸収して "1.3.2" の形に揃える
+    # 表記ゆれを吸収して "1.3.2" の形にそろえる
     return found[-1].replace("_", ".").lower()
 
 
@@ -799,7 +844,7 @@ def _classify_download_location(location: str) -> str:
     return "unknown"
 
 
-#: 属性値の取り出し。``href=`` に錨を打ち、開き引用符と同じ種類で閉じさせる。
+#: 属性値の取り出し。``href=`` を目印にし、開き引用符と同じ種類で閉じさせる。
 #: ページ全体を引用符で総当たりすると、JavaScript 中の不均衡な引用符でペアが
 #: ずれて href をまたいでしまい、肝心のリンクを取り逃がす。
 _ATTRIBUTE = re.compile(

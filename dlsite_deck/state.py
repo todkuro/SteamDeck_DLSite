@@ -42,7 +42,7 @@ class InstalledWork:
     steam_app_id: int | None = None
     #: 作品画像の取得元 URL (表紙・背景に使ったもの)
     image_url: str | None = None
-    #: シリアルコードが必要な作品はここに控える
+    #: シリアルコードが必要な作品は、そのコードをここに記録する
     serial_numbers: list[list[str]] = field(default_factory=list)
     #: 実行済みのパッチ exe (作品ディレクトリからの相対パス)
     applied_patches: list[str] = field(default_factory=list)
@@ -54,7 +54,7 @@ class InstalledWork:
 
 @dataclass
 class LinkRecord:
-    """DLC と本編の結び付き 1 件。
+    """DLC と本編の重ね合わせ 1 件。
 
     「どの作品のどのパスを、どの作品のどのパスへ」の 4 項目で持つ。DLC の
     重ね方は作品によって方向も対象も違うため、これだけの自由度が要る。
@@ -92,7 +92,7 @@ class State:
     ) -> None:
         self.path = path
         self.works: dict[str, InstalledWork] = works or {}
-        #: DLC と本編の結び付き。詳しくは link モジュールを見ること。
+        #: DLC と本編の重ね合わせ。詳しくは link モジュールを見ること。
         self.links: list[LinkRecord] = links or []
 
     @classmethod
@@ -247,7 +247,7 @@ class LibraryStatus:
 
         DLsite は ``upgrade_date`` を返さない作品が多く (実ライブラリでは
         193 件中 77 件)、タイトルの版表記も当てにならない (同じライブラリで
-        版が取れたのは 3 件、しかも全て upgrade_date も持っていた)。
+        版が取れたのは 3 件、しかもすべて upgrade_date も持っていた)。
         判定できないものを「導入済み」とだけ出すと、更新が無いのか
         分からないのかの区別が付かない。
         """

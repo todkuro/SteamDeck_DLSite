@@ -80,7 +80,7 @@ class RomanizationResult:
 
 def to_katakana(text: str) -> str:
     """ひらがなをカタカナに寄せ、全角英数を半角にする。"""
-    # NFKC で全角英数字・記号を半角に畳む
+    # NFKC で全角英数字・記号を半角にそろえる
     text = unicodedata.normalize("NFKC", text)
     return "".join(
         chr(ord(char) + 0x60) if "ぁ" <= char <= "ゖ" else char for char in text

@@ -50,11 +50,11 @@ MAX_TEXT_BLOCK = 0.45
 TIMEOUT = 30
 
 
-#: 取得したストア画像を作品フォルダに残す名前。
+#: 取得したストア画像を作品ディレクトリに残す名前。
 #:
-#: カバーを作り直すたびに DLsite から取り直すのは無駄で、セッションが切れていると
-#: そもそも取れない。展開先に置いておけば、設定を切り替えて作り直すだけなら
-#: 通信が要らなくなる。作品を削除すればフォルダごと消えるので後始末も要らない。
+#: 表紙を作り直すたびに DLsite から取得し直すのは無駄で、ログインが切れていると
+#: そもそも取得できない。作品ディレクトリに置いておけば、設定を切り替えて作り直すだけなら
+#: 通信が要らなくなる。作品を削除すればディレクトリごと消えるので後始末も要らない。
 CACHE_STEM = ".dlsite-store-image"
 
 #: 残す可能性のある拡張子。片付けと探索の両方で使う。
@@ -70,7 +70,7 @@ def cache_path(directory: Path, image: bytes) -> Path | None:
 
 
 def cached_image(directory: Path | None) -> bytes | None:
-    """作品フォルダに残してあるストア画像。無ければ ``None``。"""
+    """作品ディレクトリに残してあるストア画像。無ければ ``None``。"""
     if directory is None:
         return None
 
@@ -79,7 +79,7 @@ def cached_image(directory: Path | None) -> bytes | None:
         try:
             if path.is_file():
                 data = path.read_bytes()
-                # 書きかけや壊れたものを掴まない
+                # 書きかけや壊れたものは使わない
                 if _mime(data) is not None:
                     return data
         except OSError:
@@ -88,7 +88,7 @@ def cached_image(directory: Path | None) -> bytes | None:
 
 
 def store_image(directory: Path | None, image: bytes) -> Path | None:
-    """ストア画像を作品フォルダに残す。失敗しても呼び出し側を止めない。"""
+    """ストア画像を作品ディレクトリに残す。失敗しても呼び出し側を止めない。"""
     if directory is None or not image:
         return None
 
@@ -136,7 +136,7 @@ def can_draw_japanese() -> bool:
     文字は別の絵になり、区別が付かなかった。
 
     ``fc-list`` が無い環境では判断できないので、**描ける前提で通す**。
-    描けるものを勝手に止めるより、間違っていたら利用者が切るほうがよい。
+    描けるものを勝手に止めるより、間違っていたら利用者がオフにするほうがよい。
     """
     if not available():
         return False
@@ -159,16 +159,16 @@ def can_draw_japanese() -> bool:
 
 @lru_cache(maxsize=1)
 def title_supported() -> bool:
-    """カバーにタイトルを埋め込める環境か。
+    """表紙にタイトルを入れられる環境か。
 
     描画のコマンドと日本語フォントの両方が要る。**どちらかが欠けていれば
-    既定では埋め込まない** (豆腐が並んだカバーを作ってしまわないように)。
+    既定では入れない** (豆腐が並んだ表紙を作ってしまわないように)。
     """
     return available() and can_draw_japanese()
 
 
 def title_support_problem() -> str:
-    """埋め込めない理由。埋め込めるなら空文字。
+    """入れられない理由。入れられるなら空文字。
 
     「使えません」だけでは手の打ちようがないので、何が足りないかまで返す。
     """
@@ -284,7 +284,7 @@ def cover_svg(image: bytes, title: str, mime: str) -> str:
     size = (COVER_WIDTH - SIDE_PADDING * 2) / CHARS_PER_LINE
     lines = wrap(title)
 
-    # 行数が多いと画面を埋めてしまうので、その場合だけ文字を縮める
+    # 行数が多いと表紙が文字で埋まってしまうので、その場合だけ文字を縮める
     line_height = size * 1.2
     if len(lines) * line_height > COVER_HEIGHT * MAX_TEXT_BLOCK:
         size *= COVER_HEIGHT * MAX_TEXT_BLOCK / (len(lines) * line_height)
@@ -362,7 +362,7 @@ def artwork(
 ) -> tuple[bytes | None, bytes | None]:
     """設定に従って、縦長カバーとロゴを用意する。
 
-    CLI と Web UI で同じ判断をするための入口。作れなかったものは ``None`` を返し、
+    コマンドラインと Web UI で同じ判断をするための入口。作れなかったものは ``None`` を返し、
     呼び出し側はその分を単に設定しない。
     """
     cover_image = None

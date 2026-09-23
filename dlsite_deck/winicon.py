@@ -54,7 +54,7 @@ class IconImage:
 
 
 class _PeFile:
-    """リソースを読むのに必要な範囲だけの PE パーサ。"""
+    """リソースを読むのに必要な範囲だけの PE パーサー。"""
 
     def __init__(self, data: bytes) -> None:
         self.data = data
@@ -69,7 +69,7 @@ class _PeFile:
 
         (pe_offset,) = struct.unpack_from("<I", data, 0x3C)
         if data[pe_offset : pe_offset + 4] != b"PE\0\0":
-            raise IconError("PE ヘッダが見つかりません。")
+            raise IconError("PE ヘッダーが見つかりません。")
 
         coff = pe_offset + 4
         (section_count,) = struct.unpack_from("<H", data, coff + 2)
@@ -289,7 +289,7 @@ def _dib_to_rgba(icon: IconImage) -> bytes:
 
         rows.append(bytes(row))
 
-    # 32bpp なのにアルファが全て 0 の古いアイコンは不透明として扱う
+    # 32bpp なのにアルファがすべて 0 の古いアイコンは不透明として扱う
     if bit_count == 32 and not any(row[3::4].strip(b"\x00") for row in rows):
         rows = [_force_opaque(row, and_start, and_stride, width, height, index, data)
                 for index, row in enumerate(rows)]

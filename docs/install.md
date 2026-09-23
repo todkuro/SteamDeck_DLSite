@@ -2,78 +2,106 @@
 
 ## 必要なもの
 
-| | 必須 | 備考 |
+| もの | 要否 | 説明 |
 |---|---|---|
-| Python 3.8 以上 | 必須 | SteamOS に標準搭載。追加インストール不要 |
-| Firefox | 必須 | ログイン用。SteamOS では Discover から Flatpak で入れる |
-| `pykakasi` | 任意（推奨） | 漢字タイトルのローマ字化に必要 |
-| `rsvg-convert` | 任意（推奨） | Steam カバーにタイトルを載せるのに使う。**SteamOS には標準で入っている**。無い場合は元の画像をそのまま使う |
-| `7z` / `unar` / `unrar` / `bsdtar` | 任意 | 旧形式の分割 RAR を展開する場合のみ。PATH に無ければ `config.json` の `tool_dirs` で場所を指定できる |
+| Python 3.8 以上 | 必須 | SteamOS には最初から入っています |
+| Firefox | 必須 | DLsite へのログインに使います。SteamOS では「Discover」からインストールできます |
+| `pykakasi` | 推奨 | 漢字を含むタイトルをローマ字にするのに使います |
+| `rsvg-convert` | 推奨 | Steam の表紙にタイトルを描くのに使います。SteamOS には最初から入っています。無い場合は元の画像をそのまま使います |
+| `7z`・`unrar`・`bsdtar`・`unar` のいずれか | 任意 | 古い形式の分割 RAR を展開するときだけ使います。SteamOS には `7z`・`unrar`・`bsdtar` が最初から入っています |
 
-## pykakasi について
+## SteamDeck での準備
 
-これが無いと、漢字を含むタイトルは読みを解決できない。実在のライブラリ
-（200 作品ほど）での割合は次のとおり:
+デスクトップモードで端末（Konsole）を開き、以下のコマンドを実行します。
+どのコマンドもホームディレクトリの中にだけ書き込み、SteamOS のシステム領域は変更しません。
 
-| | 無し | 有り |
-|---|---|---|
-| pykakasi で変換 | 0 % | **約 98 %** |
-| 英語タイトルを流用 | 約 35 % | 約 2 % |
-| 仮名のみで変換 | 約 9 % | 0 % |
-| **フォールバック (作品 ID 混じりの名前)** | **約 56 %** | **0 %** |
-
-無しでは過半数がフォールバックになる。ヘボン式ローマ字のディレクトリ名を
-まともに得るには実質必須。ユーザーのホーム配下に入るだけで OS には触れない。
-
-## SteamDeck 側の準備コマンド
-
-Desktop Mode でコンソール (Konsole) を開いて実行する。
-**いずれも `~/` 配下にしか書き込まず、SteamOS のシステム領域には触れない。**
+### 1. Python を確認する
 
 ```bash
 python3 --version
 ```
 
+### 2. ツールを置く
+
+このリポジトリ一式を `~/Applications/dlsite_deck` に置きます。
+GitHub の「Code」→「Download ZIP」でダウンロードして展開するか、git を使える場合は次のコマンドで取得します。
+
 ```bash
-mkdir -p ~/Applications/dlsite_deck
+git clone https://github.com/todkuro/SteamDeck_DLSite.git ~/Applications/dlsite_deck
 ```
 
-ここに本プロジェクトの `dlsite_deck/` ディレクトリを丸ごと置く (USB か `scp` で転送)。
+### 3. pykakasi を入れる（推奨）
 
-pykakasi を入れる（推奨。実機で確認済みの手順）:
-
-**SteamOS の Python には pip が入っておらず、`ensurepip` も
-`EXTERNALLY-MANAGED` マーカーに阻まれて失敗する。** 使い捨ての venv から pip を借りて
-ユーザー領域へ入れるのが確実:
+SteamOS の Python には pip が入っていません。
+`ensurepip` で入れようとしても、システムの Python が保護されているため失敗します（`EXTERNALLY-MANAGED`）。
+そこで、一時的に作った仮想環境（venv）の pip を借りて、自分のユーザー領域にインストールします。
 
 ```bash
 python3 -m venv /tmp/bootstrap-venv && /tmp/bootstrap-venv/bin/python -m pip install --target "$(python3 -c 'import site; print(site.getusersitepackages())')" pykakasi && rm -rf /tmp/bootstrap-venv
 ```
 
-インストール先は `~/.local/lib/python3.*/site-packages` で、OS の領域は一切変更しない
-（SteamOS の更新でも消えない）。導入後は `python3 -c "import pykakasi"` が通ることと、
-`check` の「ローマ字変換」が「あり」になることを確認する。
+インストール先は `~/.local/lib/python3.*/site-packages` です。
+システム領域には触れないので、SteamOS を更新しても消えません。
 
-Firefox が未導入なら:
+次のコマンドでエラーが出なければ、インストールは成功しています。
+
+```bash
+python3 -c "import pykakasi"
+```
+
+Web UI の「状態・ログイン」タブで、「ローマ字変換」が「あり」になっていることも確認できます。
+
+### 4. Firefox を入れる（まだ入っていない場合）
 
 ```bash
 flatpak install --user flathub org.mozilla.firefox
 ```
 
-旧形式の分割 RAR にも備えるなら（`bsdtar` は SteamOS に標準で入っているので通常は不要）:
+### 分割 RAR を展開するには
 
-```bash
-which bsdtar 7z unar unrar
+古い形式の分割 RAR を展開するには、外部のコマンドが必要です。
+**SteamOS には `7z`（7-Zip）・`unrar`・`bsdtar` が最初から入っているので、何もしなくてかまいません。**
+SteamOS 3.8.16 で、どれも OS のイメージに含まれていることを確認しています（自分でインストールしたものではありません）。
+
+購入作品のほとんどは ZIP で、ZIP の展開には外部のコマンドを使いません。分割 RAR は、作者のライブラリ（約 200 作品）では 1 作品だけでした。
+
+ツールは次の順に探し、最初に見つかったものを使います。SteamDeck では `7z` が使われます。
+
+```
+unar → 7zz → 7z → unrar → bsdtar
 ```
 
-## Windows 側（開発用）
+どれが入っているかは次のコマンドで確認できます。
 
-追加の準備は不要。確認済みの環境:
+```bash
+which unar 7zz 7z unrar bsdtar
+```
 
-- Python 3.14.0（`py` ランチャ経由。`python` / `python3` は Microsoft Store のスタブなので `py` を使う）
-- Node.js 24 / git は本ツールでは使わない
+PATH の通っていない場所に置いた場合は、`config.json` の `tool_dirs` でその場所を指定してください。
 
-テストの実行:
+## pykakasi が必要な理由
+
+pykakasi が無いと、漢字を含むタイトルの読みが分からず、ローマ字にできません。
+作者のライブラリ（約 200 作品）で、ディレクトリ名がどのように決まったかを比べた結果は次のとおりです。
+
+| ディレクトリ名の決まり方 | pykakasi なし | pykakasi あり |
+|---|---|---|
+| pykakasi で漢字を変換 | 0 % | 約 98 % |
+| 英語のタイトルを使用 | 約 35 % | 約 2 % |
+| かなだけを変換 | 約 9 % | 0 % |
+| 作品 ID を含む仮の名前 | **約 56 %** | 0 % |
+
+pykakasi が無いと、半分以上の作品が作品 ID を含む仮の名前になります。
+読みやすいディレクトリ名にしたい場合は、事実上必須です。
+
+## Windows での開発
+
+追加の準備は必要ありません。次の環境で動作を確認しています。
+
+- Python 3.14（`py` ランチャーから実行します。`python` や `python3` は Microsoft Store への案内用のスタブなので使えません）
+- Node.js があると、テストで画面の JavaScript の構文も確認します。無い場合、その項目は飛ばします
+
+テストは次のコマンドで実行します。
 
 ```bash
 py -m unittest discover -s tests
@@ -81,14 +109,14 @@ py -m unittest discover -s tests
 
 ### Windows で開発するときの注意
 
-本番は Linux なので、Windows 上のテストだけでは次が再現できない。
-展開まわりを変更したら Linux でも走らせること。
+実際に動かすのは Linux なので、次の違いは Windows 上のテストでは再現できません。
+展開まわりを変更したときは、Linux でもテストを実行してください。
 
-- **ファイル名の大小**: Linux は `README.txt` と `readme.txt` を別物として展開する。Windows では片方が消える
-- **`:` `?` `*` を含むファイル名**: Linux では合法なのでそのまま展開される。Windows では作成できない
-- **`config.json` / `state.json` を Deck に持ち込まない**: Windows で `init` すると Windows 形式のパスが書き込まれる。Deck 側では作り直す
+- **ファイル名の大文字・小文字**：Linux では `README.txt` と `readme.txt` を別のファイルとして展開します。Windows では片方が消えます。
+- **`:`・`?`・`*` を含むファイル名**：Linux ではそのまま展開できますが、Windows では作成できません。
+- **設定ファイルを持ち込まない**：Windows で作った `config.json` と `state.json` には Windows 形式のパスが入ります。SteamDeck では作り直してください。
 
-WSL があれば Linux 側でもテストできる:
+WSL を使える場合は、Linux 側でもテストできます。
 
 ```bash
 wsl -e sh -c 'cd /mnt/c/path/to/dlsite_deck && python3 -m unittest discover -s tests'

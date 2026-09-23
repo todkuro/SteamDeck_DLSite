@@ -1,81 +1,83 @@
 # dlsite_deck
 
-DLsite の購入済み作品を SteamDeck (SteamOS / Desktop Mode) にダウンロード・展開するツールです。
-DLsite NEST が Proton 上で動かないことへの代替となります。
+DLsite で購入した作品を、SteamDeck にダウンロードして遊べるようにするツールです。
+DLsite の公式ツール「DLsite NEST」は Proton 上で動かないため、その代わりとなる位置付けです。
 
-追加の依存はありません（Python 標準ライブラリのみ。`pykakasi` のみ任意で推奨）。
+Python の標準ライブラリだけで動くので、基本的に追加のインストールは不要です。
+漢字のタイトルをローマ字にするために、`pykakasi` を入れておくことをおすすめします。
 
-## はじめに
+## 主な機能
 
-- **非公式 API を使用**
-  DLsite が公開した仕様ではなく、ブラウザから利用されている内部 API を解析して実装したものです。
-  **DLsite 側の変更で予告なく利用できなくなる可能性があり**、利用規約上どう扱われるかは保証できません。
-  **利用は自己責任で、各自で DLsite の利用規約を確認してください。**
-- **自分が購入した作品を、自分の端末に取得するためのツール**
-  他人のライブラリに触れることはありません（できません）。不正なリクエストとみなされる可能性があるため、無用な連続アクセスは避けてください。
-- **ブラウザの Cookie データベースを使用**
-  ログイン済みセッションを借りるためで、**ID・パスワード・2FA コードを受け取ることも、保存することも、どこかへ送ることもしません。**
-  取得した Cookie は実行中のメモリ上だけで使い、ファイルにも書き出しません（`dlsite_deck/cookies.py`）。
-- **個人の環境と購入履歴**を `config.json` と `state.json` に保存
-  シリアルコードが必要な作品を導入すると、そのコードが `state.json` に平文で記録されます。
-  **公開リポジトリに含めないでください**（`.gitignore` で除外済み）。
-- **無保証** 動作保証も、サポートが継続される約束もありません。MIT ライセンスの免責が適用されます。
+- 購入済み作品の一覧表示、ダウンロード、展開、更新の確認
+- 展開したゲームを Steam に「非 Steam ゲーム」として登録し、ストアの画像を表紙や背景に設定
+- 表紙へのゲーム名の書き込み（画像そのままだとSteamライブラリ上でタイトルが分からなくなってしまうため）
+- Proton の自動割り当てと、あとからの一括変更
+- DLC を本編に重ねる機能と、exe を実行して当てるパッチへの対応
+- 展開先のディレクトリ名を半角英数字にそろえ、バージョン番号を取り除く
+- 2 段階認証（2FA）を有効にしたアカウントにも対応
 
-## 特徴
+ツール起動後の操作はすべてブラウザ上で行います。
 
-- **2FA 有効なアカウントでも使える。** ID・パスワード・2FA コードには一切触れない
-- 購入済みライブラリの一覧、ダウンロード、展開、更新検出
-- 展開したゲームを Steam の非 Steam ゲームとして登録し、ストア画像を表紙・背景に設定
-- **カバーにゲーム名を焼き込む**（DLsite の画像にはタイトルが無く、一覧で見分けが付かないため）
-- Proton の自動割り当てと、後からの一括変更
-- DLC を本編に重ねる / exe を実行して当てるパッチの適用
-- 展開先は半角英数字のみのディレクトリ名で管理し、バージョン番号は名前から除去
-- 通常の操作はすべてローカル Web UI で完結（端末が要るのは起動の一手だけ）
+## ご利用の前に
 
-API のエンドポイントとダウンロード解決手順は非公式実装
-[`AcrylicShrimp/dlsite-manager`](https://github.com/AcrylicShrimp/dlsite-manager) の `crates/dm-api` から移植しています。
+- **非公式の API を使っています。** DLsite が公開している仕様ではなく、ブラウザが内部で使っている API を解析して実装しました。
+  DLsite 側の変更によって、予告なく使えなくなる可能性があります。
+  利用規約上の扱いも保証できないので、DLsite の利用規約をご自身で確認のうえ、自己責任でご利用ください。
+- **ID・パスワード・2FA コードは扱いません。** ログインは Firefox で行い、このツールはその Cookie を読み取るだけです。
+  読み取った Cookie はメモリ上でのみ使い、ファイルには保存しません（[`dlsite_deck/cookies.py`](dlsite_deck/cookies.py)）。
+- 自分が購入した作品を、自分の端末に取得するためのツールです。他人のライブラリにはアクセスできません。
+  不正なアクセスとみなされないよう、短時間に大量の操作を行うのは避けてください。
+- `config.json` と `state.json` には、お使いの環境の情報と購入履歴が保存されます。
+  シリアルコードが必要な作品を導入すると、そのコードも平文で記録されます。
+  これらのファイルは公開しないでください（`.gitignore` で除外しています）。
+- 動作の保証や継続的なサポートはありません（MIT ライセンス）。
 
-## クイックスタート
+## はじめ方
 
-SteamDeck の Desktop Mode で、本プロジェクトの `dlsite_deck/` を `~/Applications/dlsite_deck` に置き、
+SteamDeck をデスクトップモードに切り替え、このリポジトリ一式を `~/Applications/dlsite_deck` に置きます。
+端末を開いて次のコマンドを実行すると、ブラウザで画面が開きます。
 
 ```bash
-python3 -m dlsite_deck serve
+cd ~/Applications/dlsite_deck && python3 -m dlsite_deck serve
 ```
 
-ブラウザが開いたら「状態・ログイン」タブの手順に従って Firefox で DLsite にログインし、
-「ライブラリ」タブから取得する。詳しい手順は [導入](docs/install.md) と [使い方](docs/usage.md) を参照。
+「状態・ログイン」タブの案内に従って Firefox で DLsite にログインし、「ライブラリ」タブから作品を取得してください。
+詳しくは [導入](docs/install.md) と [使い方](docs/usage.md) をご覧ください。
 
-> **`--host` で外部に開かないこと。** このツールに認証機構は無く、到達できる相手は誰でも
-> 購入履歴の閲覧・ダウンロード・Steam への登録を実行できる。既定は `127.0.0.1` のみ。
+> [!WARNING]
+> `--host` オプションで、他の端末からの接続を許可しないでください。
+> 他の端末から操作するにも起動ごとの合言葉が必要ですが、通信は暗号化されません（HTTP）。
+> 同じネットワークで通信を盗み見られると、合言葉と購入履歴を読まれ、ダウンロードや削除などの操作をされてしまいます。
+> 既定では同じ端末（`127.0.0.1`）からしか接続できません。
 
 ## ドキュメント
 
-| | |
+| 資料 | 内容 |
 |---|---|
-| [導入](docs/install.md) | 必要なもの、SteamDeck 側の準備コマンド、pykakasi、Windows での開発 |
-| [使い方](docs/usage.md) | Web UI の起動、ゲームモードからの利用、画面の構成、Steam 起動中の扱い、ログイン |
-| [CLI](docs/cli.md) | 端末からの操作、手動展開済みゲームの取り込み、Steam 登録、Proton、起動オプション、表紙画像 |
-| [DLC とパッチ](docs/dlc.md) | DLC を本編に重ねる 4 項目モデル、exe を実行して当てるパッチ |
+| [導入](docs/install.md) | 必要なもの、SteamDeck での準備、Windows での開発 |
+| [使い方](docs/usage.md) | 起動と終了、メニューやゲームモードへの登録、画面の説明、ログイン |
+| [コマンドライン](docs/cli.md) | 端末からの操作、Steam への登録、Proton、起動オプション、表紙の画像 |
+| [DLC とパッチ](docs/dlc.md) | DLC を本編に重ねる方法と取り消し方、exe で当てるパッチ |
 | [設定](docs/configuration.md) | `config.json` の全項目 |
-| [構成](docs/architecture.md) | モジュール構成とテストの内訳 |
-| [SteamDeck 以外の環境](docs/platforms.md) | Linux デスクトップ / Windows / macOS で何が動き、何に手当てが要るか |
-| [既知の制限](docs/limitations.md) | できないことと、その理由（コントローラ設定を含む） |
-| [検証状況](docs/verification.md) | 実機・実環境で何をどこまで確認したか |
+| [他の環境で使う](docs/platforms.md) | Linux デスクトップ・Windows・macOS での対応状況 |
+| [既知の制限](docs/limitations.md) | できないことと、その理由 |
+| [構成](docs/architecture.md) | ソースコードとテストの構成 |
+| [検証状況](docs/verification.md) | 実際の環境でどこまで確認したか |
 
 ## 主な制限
 
-- **Chromium 系ブラウザに未対応**（Cookie が OS のキーリングで暗号化されているため）。Firefox を使う
-- **漢字タイトルのローマ字化には `pykakasi` が実質必須**
-- **Steam の書き換えは Steam を終了してから行う。** UI から終了させるボタンがある
-- **コントローラ設定は変更できない**（Steam の作りによる制限。ゲームモードで設定する）
-- 非公式 API のため、DLsite 側の変更で予告なく壊れうる
+- Chromium 系のブラウザ（Chrome、Edge など）には対応していません。Cookie が OS の機能で暗号化されているためです。Firefox をお使いください。
+- 漢字のタイトルをローマ字にするには、`pykakasi` が事実上必要です。
+- Steam への登録や設定の変更は、Steam を終了してから行う必要があります。画面に Steam を終了するボタンがあります。
+- コントローラの設定は変更できません。ゲームモードで設定してください。
+- 非公式の API を使っているため、DLsite 側の変更で動かなくなることがあります。
 
-詳細と根拠は [既知の制限](docs/limitations.md) を参照。
+詳しくは [既知の制限](docs/limitations.md) をご覧ください。
 
 ## ライセンス
 
-MIT。詳細は [LICENSE](LICENSE) を参照。
+MIT ライセンスです。詳しくは [LICENSE](LICENSE) をご覧ください。
 
-DLsite Play API のエンドポイントとダウンロード種別の解決手順は、[`AcrylicShrimp/dlsite-manager`](https://github.com/AcrylicShrimp/dlsite-manager)（MIT License, Copyright (c) AcrylicShrimp）から移植。
-Rust から Python へ書き直したもので、コードをそのまま複製してはいない。上流の著作権表示は LICENSE に含めている。
+DLsite Play API のエンドポイントとダウンロード方法の判定手順は、
+[`AcrylicShrimp/dlsite-manager`](https://github.com/AcrylicShrimp/dlsite-manager)（MIT License, Copyright (c) AcrylicShrimp）の `crates/dm-api` を参考に、Rust から Python へ書き直したものです。
+コードをそのまま複製したものではありません。移植元の著作権表示は LICENSE に含めています。

@@ -2,12 +2,12 @@
 
 DLsite のセッション Cookie は HttpOnly なので ``document.cookie`` からは読めない
 (検証済み)。ブラウザが自前で持つ Cookie データベースを直接読むことで、2FA を含む
-通常のログインをユーザーにそのまま行ってもらいつつ、確立済みのセッションだけを
+通常のログインを利用者にそのまま行ってもらいつつ、確立済みのセッションだけを
 借りる。ツールは認証情報に一切触れない。
 
 現状 Firefox 系 (native / Flatpak / Snap / Windows) に対応する。Chromium 系は
 値が OS のキーリングで暗号化されており標準ライブラリだけでは復号できないため、
-``load_manual`` によるエクスポート済み Cookie の読み込みをフォールバックとする。
+``load_manual`` で、書き出した Cookie のファイルを読み込めるようにしてある。
 """
 
 from __future__ import annotations
@@ -31,13 +31,13 @@ DLSITE_DOMAIN_SUFFIX = "dlsite.com"
 #:
 #: ``play_session`` はブラウザが play.dlsite.com を開いたときに作られるが、これを
 #: 持ち込むとダウンロード API が 500 を返す (実機で確認済み)。こちらは
-#: :meth:`DlsiteClient.refresh_session` で自前のセッションを張るので、
+#: :meth:`DlsiteClient.refresh_session` で自前のセッションをつなぐので、
 #: ブラウザ側のものは捨てて構わない。
 BORROWED_COOKIE_DENYLIST = frozenset({"play_session"})
 
-#: ログイン手順。CLI と Web UI の両方から同じ文面を出す。
+#: ログイン手順。コマンドラインと Web UI の両方から同じ文面を出す。
 LOGIN_STEPS = (
-    "SteamDeck の Desktop Mode で Firefox を開く",
+    "SteamDeck のデスクトップモードで Firefox を開く",
     "https://www.dlsite.com/ にアクセスし、ID・パスワード・2FA コードで"
     "いつもどおりログインする（このツールは入力に一切関与しない）",
     "続けて https://play.dlsite.com/ を一度開く。"
@@ -109,9 +109,9 @@ def _candidate_firefox_roots() -> list[Path]:
         if appdata:
             roots.append(Path(appdata) / "Mozilla" / "Firefox")
     else:
-        # Firefox は近年プロファイルを XDG の場所へ移した。実測では
+        # Firefox は、版や配布形態によってプロファイルの置き場が違う。実測では
         # Flatpak 版 155.0.1 が ~/.mozilla、deb 版 156.0 が ~/.config/mozilla
-        # を使っていた。版や配布形態で変わるので**両方を見る**。
+        # を使っていた。どちらで決まるかは確かめていないので**両方を見る**。
         config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
         flatpak = home / ".var" / "app" / "org.mozilla.firefox"
 
@@ -306,9 +306,9 @@ def load_firefox(
 
 
 def load_manual(path: Path, domain_suffix: str = DLSITE_DOMAIN_SUFFIX) -> list[RawCookie]:
-    """手動エクスポートした Cookie を読み込む (フォールバック経路)。
+    """手で書き出した Cookie を読み込む (Firefox を使わない場合の経路)。
 
-    ブラウザ拡張が吐く JSON 配列形式と、Netscape 形式の cookies.txt に対応する。
+    ブラウザの拡張機能が出力する JSON 配列形式と、Netscape 形式の cookies.txt に対応する。
     """
     if not path.is_file():
         raise CookieError(f"Cookie ファイルがありません: {path}")

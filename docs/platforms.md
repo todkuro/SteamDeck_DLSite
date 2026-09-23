@@ -1,25 +1,24 @@
-# SteamDeck 以外の環境
+# 他の環境で使う
 
-このツールは SteamDeck (SteamOS) を前提に作ってあるが、**Steam の非 Steam ゲーム登録も
-Firefox の Cookie 読み取りも OS 固有の仕組みではない**ので、他の環境でも大半は動く。
-ただし環境ごとに前提が変わる。
+このツールは SteamDeck（SteamOS）で使うことを前提に作っています。
+ただし、Steam への非 Steam ゲームの登録や Firefox の Cookie の読み取りは OS に依存しない仕組みなので、他の環境でもほとんどの機能が動きます。
 
-| | Linux デスクトップ | Windows | macOS |
+| 機能 | Linux デスクトップ | Windows | macOS |
 |---|---|---|---|
-| ライブラリ一覧・ダウンロード・展開 | ○ | ○ | ○ |
-| Firefox の Cookie 読み取り | ○ | ○ | **×**（手動書き出しが要る） |
-| Steam の `userdata` 自動検出 | ○ | ○（レジストリ） | **×**（手で指定） |
-| Steam 登録・解除・表紙画像 | ○ | ○ | ○（パスを指定すれば） |
-| **カバーにタイトルを埋め込む** | ○（下記が要る） | **×** | △（Homebrew で入れれば） |
-| Proton の割り当て | ○ | **切ること** | × |
-| exe を実行して当てるパッチ | ○ | ×（Proton 前提のため） | × |
+| 作品の一覧・ダウンロード・展開 | ○ | ○ | ○ |
+| Firefox の Cookie の読み取り | ○ | ○ | ×（Cookie の書き出しが必要） |
+| Steam のデータの場所を自動で探す | ○ | ○（レジストリから） | ×（手で指定） |
+| Steam への登録・解除、表紙の設定 | ○ | ○ | ○（場所を指定すれば） |
+| 表紙へのタイトルの書き込み | ○（下記の準備が必要） | × | △（Homebrew で準備すれば） |
+| Proton の割り当て | ○ | 不要（自動でオフ） | × |
+| exe を実行して当てるパッチ | ○ | ×（Proton が前提のため） | × |
 | Steam を終了する | ○ | ○ | 未確認 |
 
-**どれも落ちない。** 使えないものは静かに飛ばし、登録などの主目的は成立する。
+使えない機能は自動的に飛ばすので、エラーで止まることはありません。作品の取得や Steam への登録といった主な機能は使えます。
 
-## Linux デスクトップ（Ubuntu / Arch / Fedora など）
+## Linux デスクトップ（Ubuntu、Arch、Fedora など）
 
-SteamDeck に一番近い。`userdata` の候補にはネイティブ版・Flatpak 版の両方を入れてある。
+SteamDeck にもっとも近い環境です。Steam のデータの場所は、通常版と Flatpak 版の両方から探します。
 
 ```
 ~/.steam/steam/userdata
@@ -27,164 +26,165 @@ SteamDeck に一番近い。`userdata` の候補にはネイティブ版・Flatp
 ~/.var/app/com.valvesoftware.Steam/data/Steam/userdata
 ```
 
-カバーにタイトルを埋め込むには **`rsvg-convert` と日本語フォント**が要る。
-SteamOS には最初から入っているが、他のディストリビューションでは入れる必要がある。
+### 表紙にタイトルを入れるには
 
-まず何が足りないか確かめる:
+`rsvg-convert` と日本語フォントが必要です。SteamOS には最初から入っていますが、他のディストリビューションではインストールが必要です。
+
+まず、足りないものがあるかを確認します。
 
 ```bash
 command -v rsvg-convert; fc-list :lang=ja family | head
 ```
 
-`rsvg-convert` が無い場合（パッケージ名はディストリビューションによる）:
+足りない場合は、お使いのディストリビューションに合わせてインストールしてください（パッケージ名はディストリビューションによって異なります）。
+
+Ubuntu・Debian:
 
 ```bash
 sudo apt install librsvg2-bin fonts-noto-cjk
 ```
 
+Arch Linux:
+
 ```bash
 sudo pacman -S librsvg noto-fonts-cjk
 ```
+
+Fedora:
 
 ```bash
 sudo dnf install librsvg2-tools google-noto-sans-cjk-fonts
 ```
 
-> **足りなければ、この設定は既定で OFF になる。** ツールが起動時に `rsvg-convert` と
-> `fc-list :lang=ja` を見て決めるので、豆腐だらけのカバーが勝手にできることはない。
-> 足りない状態で手動で ON にすると、設定画面に理由が出る。
+> [!NOTE]
+> 足りないものがある場合、この機能は最初からオフになります。ツールが起動するときに `rsvg-convert` と日本語フォントの有無を確認して決めるので、文字化けした表紙が作られることはありません。
+> 足りない状態でオンにすると、設定画面に理由が表示されます。
 
-> **日本語フォントが無いと豆腐になる。** `rsvg-convert` だけ入れても、フォントが
-> 無ければ文字が □ で並ぶ。`fc-list :lang=ja` が空でないことを確かめること。
-> 描画に使う名前は `cover.py` の `FONT_FAMILY`（既定は Noto Sans CJK JP →
-> Noto Sans → sans-serif）。別のフォントを使いたい場合はここを書き換える。
+`rsvg-convert` だけをインストールしても、日本語フォントがなければ文字は「□」になります。`fc-list :lang=ja` の結果が空でないことを確認してください。
+使うフォントは `dlsite_deck/cover.py` の `FONT_FAMILY` で決めています（既定は Noto Sans CJK JP、Noto Sans、sans-serif の順）。別のフォントを使いたい場合は、ここを書き換えてください。
 
-PATH に置けない場合は、設定の **「展開ツールを探す場所」**（`tool_dirs`）に
-`rsvg-convert` のあるディレクトリを足しても見つかる。
+`rsvg-convert` を PATH の通った場所に置けない場合は、`config.json` の `tool_dirs` にそのディレクトリを追加しても使えます。
 
-### Firefox のプロファイル置き場
+### 分割 RAR を展開するには
 
-**Firefox はプロファイルを XDG のディレクトリへ移した。** 実測した限りでは次のとおりで、
-版と配布形態のどちらで決まるのかまでは確かめていない。
+古い形式の分割 RAR を展開するには、`7z`・`unrar`・`bsdtar`・`unar` のいずれかが必要です。SteamOS には最初から入っていますが、他のディストリビューションでは入っていないことがあります。
+購入作品のほとんどを占める ZIP には不要なので、分割 RAR の作品を取得するときだけ用意すれば足ります。
 
-| | 版 | 置き場 |
+Ubuntu 24.04:
+
+```bash
+sudo apt install 7zip
+```
+
+Arch Linux:
+
+```bash
+sudo pacman -S 7zip
+```
+
+他のディストリビューションでは、パッケージ名が異なることがあります。
+
+### Firefox のプロファイルの場所
+
+Firefox は、環境によってプロファイルの保存場所が異なります。作者が確認した範囲では次のとおりです（バージョンと配布形態のどちらで決まるのかは確認していません）。
+
+| 配布形態 | バージョン | 場所 |
 |---|---|---|
-| Flatpak (SteamDeck) | 155.0.1 | `~/.var/app/org.mozilla.firefox/.mozilla/firefox` |
-| deb (Mozilla 公式) | 156.0 | `~/.config/mozilla/firefox` |
+| Flatpak（SteamDeck） | 155.0.1 | `~/.var/app/org.mozilla.firefox/.mozilla/firefox` |
+| deb（Mozilla 公式） | 156.0 | `~/.config/mozilla/firefox` |
 
-**両方を見るようにしてある**ので、どちらでも動く。Snap 版・Flatpak 版それぞれの
-XDG の位置（Flatpak の中では `XDG_CONFIG_HOME` が `~/.var/app/<id>/config` になる）も
-候補に入れてある。`XDG_CONFIG_HOME` を設定している場合はそれに従う。
+このツールはどちらの場所も探すので、どちらの Firefox でも使えます。Snap 版と Flatpak 版の新しい場所や、環境変数 `XDG_CONFIG_HOME` を設定している場合の場所も探します。
 
-見つからない場合は `DLSITE_DECK_FIREFOX_ROOT` で置き場を直接指定できる。
+見つからない場合は、環境変数 `DLSITE_DECK_FIREFOX_ROOT` でプロファイルの場所を直接指定できます。
+プロファイルの場所は、次のコマンドで探せます。
 
 ```bash
 find ~ -name cookies.sqlite 2>/dev/null
 ```
 
-## Windows
+### アプリケーションメニューの更新
 
-**ツールの主目的は動く。** 実際、開発はこの環境で行っている。
-
-- Steam の場所は**レジストリ**から読む（`HKCU\Software\Valve\Steam` の `SteamPath` ほか）。
-  既定以外の場所（別ドライブに入れている場合など）でも見つかる
-- `steam_executable` の既定は `/usr/bin/steam` だが、そこに無ければ PATH と
-  Steam のフォルダも見るので `steam.exe` が見つかる。**既定のままでよい**
-- `shortcuts.vdf` の読み書き、表紙・背景の設置は同じように動く
-- **Proton の割り当ては自動で切れる。** Windows では `steam_compat_tool` の既定が
-  空になる。存在しない互換ツールを `config.vdf` に書き込まないため
-
-### 設定を変えること
-
-**ロゴを exe のアイコンにする。**
-
-```json
-"steam_logo_source": "exe"
-```
-
-`title`（既定）は `rsvg-convert` で描くので、Windows では作られない。
-`exe` なら実行ファイルのアイコンを使うので Windows でも付く。
-
-> 作れなかっただけの場合、**既にあるロゴは消さない**。別の環境で付けたものを
-> 黙って剥がさないようにしてある。消したいときは `none` を選ぶ。
-
-### できないこと
-
-- **カバーにタイトルを埋め込めない。** `rsvg-convert` が標準では入らないため。
-  設定は無視され、元の画像がそのまま置かれる
-- **exe を実行して当てるパッチ。** Proton のプレフィックスで動かす作りなので、
-  Windows では使えない（そちらでは exe を直接実行すればよい）
-- loopback が切られる環境がある。[既知の制限](limitations.md#windows-で-web-ui-を使うときの注意) を参照
-
-### 新しく入れた Steam では Proton の割り当てに注意
-
-**Steam を入れたばかりだと `config.vdf` に `CompatToolMapping` の節がまだ無い。**
-以前はこの場合に何もせず諦めていたため、登録しても Proton が割り当てられない
-まま黙って進んでいた。現在は**節ごと作る**ようにしてある（素の Ubuntu に入れた
-新品の Steam で確認済み）。
-
-### アプリケーションメニューの更新コマンドは環境によって違う
-
-[使い方](usage.md#アプリケーションメニューに載せるdesktop-mode) に書いてある
-`kbuildsycoca6` は **KDE (SteamDeck の Desktop Mode) のもの**で、XFCE や GNOME には無い。
-共通で使えるのはこちら:
+[使い方](usage.md#アプリケーションメニューに登録するデスクトップモード) に書いた `kbuildsycoca6` は、KDE（SteamDeck のデスクトップモード）用のコマンドです。XFCE や GNOME にはありません。
+どの環境でも使えるのは次のコマンドです。
 
 ```bash
 update-desktop-database ~/.local/share/applications
 ```
 
-たいていの環境では `.desktop` を置くだけで拾われるので、必要になるのは
-すぐ反映されないときだけ。
+多くの環境では、`.desktop` ファイルを置くだけでメニューに表示されます。このコマンドが必要なのは、すぐに表示されないときだけです。
 
-### `steam -shutdown` はログイン後でないと効かない
+### 「Steam を終了する」はログインしてから
 
-UI の「Steam を終了する」は `steam -shutdown` に頼っている。**サインイン画面で
-止まっている Steam は、この指示を受け取っても終了しない。**
-
-Ubuntu のコンテナで実測した差:
+Web UI の「Steam を終了する」は、`steam -shutdown` コマンドを使っています。
+Steam がサインイン画面のままだと、このコマンドを受け取っても終了しません。
 
 | Steam の状態 | 結果 |
 |---|---|
-| サインイン画面のまま | 90 秒待っても終了しない（2 回とも） |
-| ログイン済み | **4.0 秒で終了** |
+| サインイン画面のまま | 90 秒待っても終了しませんでした |
+| ログイン済み | 4 秒で終了しました |
 
-どちらもログには `Steam is already running, exiting (command line was forwarded)` と
-出る。**指示は届いているが、ログイン前の Steam が処理しない。**
+どちらの場合も、Steam のログには `Steam is already running, exiting (command line was forwarded)` と表示されます。指示は届いていますが、ログインする前の Steam はそれを処理しません。
 
-**ツールは無理に kill しない。** 待って諦め、Steam のメニューから閉じるよう案内する
-（`shortcuts.vdf` を書き戻す前に殺してしまわないため）。手で閉じたあと
-「Steam を終了しました」を押せば続けられる。
+ツールは Steam を強制終了しません。`shortcuts.vdf` を書き戻す前に止めてしまうおそれがあるためです。しばらく待っても終了しない場合は、Steam のメニューから終了するよう案内します。Steam を終了したあとに「Steam を終了しました」を押すと、操作を続けられます。
 
-### セッション種別
+### インストールしたばかりの Steam
 
-ゲームモードの判定は gamescope の有無で行う。XFCE や GNOME はどちらにも当たらず
-`unknown` になるが、**ゲームモード以外はすべて Desktop Mode と同じ扱い**なので
-問題ない（XFCE で「Steam を終了する」が出ること、案内文が Desktop Mode 向けに
-なることを確認済み）。
+Steam をインストールしたばかりだと、`config.vdf` に Proton の割り当てを記録する部分（`CompatToolMapping`）がまだありません。
+このツールは、その場合も必要な部分を作ってから Proton を割り当てます。
+
+### モードの判定
+
+SteamDeck のゲームモードかどうかは、`gamescope` が動いているかで判定します。
+XFCE や GNOME はどちらにも当てはまりませんが、ゲームモード以外はすべてデスクトップモードと同じように扱うので、問題なく使えます。
 
 ### ロケール
 
-SteamOS には `ja_JP.UTF-8` が無いが、普通のディストリビューションでは用意できる。
-その場合、[起動オプションによる文字化け対策](cli.md#起動オプション日本語の文字化け対策)
-は不要になることが多い。
+SteamOS には日本語のロケール（`ja_JP.UTF-8`）がありませんが、通常のディストリビューションでは用意できます。
+その場合、[起動オプションでの文字化け対策](cli.md#起動オプション日本語の文字化け対策) は多くの場合不要です。
+
+## Windows
+
+主な機能はそのまま使えます。このツールの開発も Windows で行っています。
+
+- Steam の場所はレジストリ（`HKCU\Software\Valve\Steam` の `SteamPath` など）から読み取ります。別のドライブにインストールしている場合も見つかります。
+- `steam_executable` の既定値は `/usr/bin/steam` ですが、見つからない場合は PATH と Steam のディレクトリからも探すので、`steam.exe` が見つかります。変更する必要はありません。
+- `shortcuts.vdf` の読み書きや、表紙・背景の設定は Linux と同じように動きます。
+- 分割 RAR の展開には、Windows に標準で入っている `C:\Windows\System32\tar.exe`（中身は `bsdtar`）を使います。見つかることは確認していますが、実際に分割 RAR を展開したことはありません。
+- Proton の割り当ては、自動でオフになります（`steam_compat_tool` の既定値が空になります）。Windows のゲームを Windows で動かすのに Proton は不要で、存在しない互換ツールを `config.vdf` に書き込まないようにしています。
+
+### ロゴを exe のアイコンにする
+
+Windows では、設定の `steam_logo_source` を `exe` にすることをおすすめします。
+
+```json
+"steam_logo_source": "exe"
+```
+
+既定の `title` は `rsvg-convert` で描くので、Windows ではロゴが作られません。`exe` にすると exe のアイコンを使うので、Windows でもロゴが付きます。
+
+> [!NOTE]
+> ロゴを作れなかった場合でも、すでにあるロゴは削除しません。別の環境で付けたロゴを、知らないうちに消してしまわないようにするためです。
+> ロゴを削除したい場合は、`none` を選んでください。
+
+### Windows でできないこと
+
+- **表紙にタイトルを入れられません。** `rsvg-convert` が標準では入っていないためです。設定は無視され、元の画像をそのまま使います。
+- **exe を実行して当てるパッチは使えません。** Proton の環境の中で実行する仕組みのためです。Windows では、パッチの exe を直接実行してください。
+- 環境によっては、Web UI への接続が切断されることがあります。[既知の制限](limitations.md#windows-で-web-ui-を使うときの注意) をご覧ください。
 
 ## macOS
 
-**未検証。** 次の 2 か所が macOS のパスを見ていないので、そのままでは繋がらない。
+動作は確認していません。次の 2 つの場所を自動では探さないので、そのままでは使えません。
 
-| | 実際の場所 | 対処 |
+| 対象 | 実際の場所 | 対処 |
 |---|---|---|
-| Firefox のプロファイル | `~/Library/Application Support/Firefox` | 環境変数 `DLSITE_DECK_FIREFOX_ROOT` で指定するか、`cookie_source` を `manual` にする |
-| Steam の `userdata` | `~/Library/Application Support/Steam/userdata` | 設定の `steam_userdata_dir` に書く |
+| Firefox のプロファイル | `~/Library/Application Support/Firefox` | 環境変数 `DLSITE_DECK_FIREFOX_ROOT` で指定するか、`cookie_source` を `manual` にします |
+| Steam の `userdata` | `~/Library/Application Support/Steam/userdata` | 設定の `steam_userdata_dir` に書きます |
 
-`rsvg-convert` は Homebrew で入る（`brew install librsvg`）が、日本語フォントの
-扱いを含めて確かめていない。
+`rsvg-convert` は Homebrew でインストールできます（`brew install librsvg`）が、日本語フォントの扱いも含めて確認していません。
 
 ## まとめ
 
-**カバーへのタイトル埋め込みだけが、環境をはっきり選ぶ。** `rsvg-convert` と
-日本語フォントがあるかどうかで決まり、SteamOS と多くの Linux デスクトップでは
-満たせるが、Windows では追加の手当てが要る。
+環境によって使えるかどうかがはっきり分かれるのは、表紙へのタイトルの書き込みだけです。`rsvg-convert` と日本語フォントがあるかどうかで決まり、SteamOS と多くの Linux デスクトップでは使えますが、Windows では追加の準備が必要です。
 
-それ以外（取得・展開・Steam 登録・表紙画像・更新検出）は、Linux と Windows の
-どちらでも動くことを実際に確認している。
+それ以外の機能（作品の取得・展開・Steam への登録・表紙の設定・更新の確認）は、Linux と Windows のどちらでも動くことを確認しています。

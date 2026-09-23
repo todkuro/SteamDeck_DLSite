@@ -22,9 +22,9 @@ from . import (
     download,
     session,
     install,
+    server,
     state,
     steam,
-    webui,
 )
 
 LOGIN_INSTRUCTIONS = session.LOGIN_INSTRUCTIONS
@@ -117,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch.set_defaults(handler=cmd_download)
 
     adopt = sub.add_parser(
-        "adopt", help="手作業で展開済みのフォルダをツールの管理下に取り込む"
+        "adopt", help="手作業で展開済みのディレクトリをツールの管理下に取り込む"
     )
     adopt.add_argument(
         "mapping",
@@ -274,7 +274,7 @@ def cmd_serve(args) -> int:
     if not _confirm_external_paths(args, cfg):
         return 1
 
-    return webui.serve(
+    return server.serve(
         cfg,
         host=args.host,
         port=args.port,
@@ -354,10 +354,8 @@ def cmd_check(args) -> int:
         print(f"  セッション  : 有効 (購入 {count.get('user', '?')} 件)")
     elif client.refresh_session():
         count = client.content_count()
-        print(
-            f"  セッション  : 張り直して有効 (購入 {count.get('user', '?')} 件)"
-        )
-        print("                Play 側のセッションは短命なので毎回張り直す")
+        print(f"  セッション  : 有効 (購入 {count.get('user', '?')} 件)")
+        print("                Play 側セッションを再取得しました")
     else:
         print("  セッション  : 無効または期限切れ")
         print()
@@ -569,9 +567,11 @@ def _process_work(
 
     print(f"  展開先: {result.output_dir}")
     if result.flattened:
-        print("    (単一フォルダを展開先直下に引き上げました)")
+        print("    (単一ディレクトリを展開先直下に引き上げました)")
     for before, after in result.renamed:
         print(f"    バージョン除去: {before.name} -> {after.name}")
+    for link in result.removed_links:
+        print(f"    外を指すリンクを取り除きました: {link}")
     if result.executable:
         print(f"    実行ファイル: {result.executable.relative_to(result.output_dir)}")
 
@@ -589,7 +589,7 @@ def cmd_steam_images(args, cfg: config_module.Config, userdata: Path) -> int:
 
     ツールを使う前に自分で登録したショートカットは、DLsite のタイトルとは違う名前が
     付いていることが多い。名前で照合すると重複を作ってしまうので、**exe のパスが
-    どの作品のフォルダに入っているか**で対応付ける。``shortcuts.vdf`` は読むだけで
+    どの作品のディレクトリに入っているか**で対応付ける。``shortcuts.vdf`` は読むだけで
     書き換えないので、AppID もプレイ時間も Proton の割り当ても保たれる。
     """
     current = state.State.load(cfg.state_path)
@@ -679,7 +679,7 @@ def cmd_steam_images(args, cfg: config_module.Config, userdata: Path) -> int:
 
 
 def cmd_adopt(args) -> int:
-    """既に展開済みのフォルダを、ダウンロードせずに導入済みとして記録する。
+    """既に展開済みのディレクトリを、ダウンロードせずに導入済みとして記録する。
 
     ツールを使う前に手作業で展開したゲーム群を管理下に移すための入口。
     ファイルには一切触れず、``state.json`` に記録するだけ。
@@ -707,7 +707,7 @@ def cmd_adopt(args) -> int:
         work_id = str(row.get("work_id", "")).upper()
 
         if not directory.is_dir():
-            skipped.append(f"{directory}: フォルダがありません")
+            skipped.append(f"{directory}: ディレクトリがありません")
             continue
 
         work = catalogue.get(work_id)
@@ -803,7 +803,7 @@ def cmd_steam(args) -> int:
         print("--dry-run のため実行しません。")
         return 0
 
-    # 画像の取得にだけセッションが要る。要らないなら繋ぎに行かない。
+    # 画像の取得にだけセッションが要る。要らないなら接続しない。
     client: api.DlsiteClient | None = None
     if not args.remove and cfg.steam_grid_images and not args.no_images:
         try:
@@ -881,9 +881,9 @@ def _fill_missing_image_urls(
 def _fetch_grid_image(
     entry: state.InstalledWork, client: api.DlsiteClient | None
 ) -> bytes | None:
-    """作品画像を取ってくる。失敗しても登録自体は続ける。
+    """作品画像を取得する。失敗しても登録自体は続ける。
 
-    一度取ったものは作品フォルダに残してあるので、まずそちらを見る。
+    一度取ったものは作品ディレクトリに残してあるので、まずそちらを見る。
     """
     saved = cover.cached_image(entry.path)
     if saved is not None:

@@ -1,7 +1,7 @@
 """設定に従ってセッションを用意する。
 
 「Cookie をどこから読むか」「セッションが使えるか確かめる」「作品画像を取る」は
-CLI と Web UI の両方が必要とする。別々に書くと片方だけ直して食い違うので、
+コマンドラインと Web UI の両方が必要とする。別々に書くと片方だけ直して食い違うので、
 ここにまとめてある。
 """
 
@@ -38,7 +38,7 @@ def build_client(cfg: config_module.Config) -> api.DlsiteClient:
 
 
 def fetch_image(client: api.DlsiteClient | None, url: str | None) -> bytes | None:
-    """作品画像を取ってくる。取れなくても呼び出し側を止めない。
+    """作品画像を取得する。取得できなくても呼び出し側を止めない。
 
     画像はあくまで飾りなので、失敗しても登録そのものは成立させる。
     """

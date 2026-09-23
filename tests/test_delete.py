@@ -112,7 +112,8 @@ class DeleteWorkTest(unittest.TestCase):
 
         self.assertEqual(len(after.links), 1)
         self.assertEqual(after.links[0].source_id, "RJ8")
-        self.assertIn("DLC", result["message"])
+        # 適用前なので、残るファイルは無い
+        self.assertNotIn("残っています", result["message"])
 
     def test_other_works_are_untouched(self):
         keep = self._add("RJ10")
@@ -230,8 +231,28 @@ class DeleteCacheTest(DeleteWorkTest):
 
         result = self.backend.delete_work("DLC3")
         self.assertEqual(result["left_behind"], ["本編3"])
-        self.assertIn("本編3", result["message"])
-        self.assertIn("残っています", result["message"])
+        self.assertIn("1 件の適用済みDLCのファイルはそのまま残っています", result["message"])
+
+    def test_message_counts_only_files_left_behind(self):
+        """重ねられた側 (本編) を消したときや、適用前の記録は数えない。"""
+        for work_id in ("DLC4", "BASE4", "DLC5", "OTHER5"):
+            self._add(work_id)
+        current = self.backend.state()
+        applied = "2026-08-18T00:00:00+00:00"
+        current.links.append(state.LinkRecord(source_id="DLC4", target_id="BASE4", applied_at=applied))
+        current.links.append(state.LinkRecord(source_id="BASE4", target_id="OTHER5", applied_at=applied))
+        current.links.append(state.LinkRecord(source_id="BASE4", target_id="DLC5"))
+        current.save()
+
+        result = self.backend.delete_work("BASE4")
+        self.assertIn("1 件の適用済みDLCのファイル", result["message"])
+        self.assertEqual(self.backend.state().links, [])
+
+        # 重ねられた側だけの記録なら、残るファイルは無い
+        current = self.backend.state()
+        current.links.append(state.LinkRecord(source_id="DLC5", target_id="OTHER5", applied_at=applied))
+        current.save()
+        self.assertNotIn("残っています", self.backend.delete_work("OTHER5")["message"])
 
 
 class SessionKindTest(unittest.TestCase):
@@ -302,7 +323,7 @@ class BlockedMessageTest(unittest.TestCase):
         self.steam.session_kind = lambda: self.steam.SESSION_GAMING
         message = self.backend._steam_blocked("登録")
 
-        self.assertIn("Desktop Mode", message)
+        self.assertIn("デスクトップモード", message)
         # 実行できない指示を出さないこと
         self.assertNotIn("終了してから", message)
 
@@ -311,7 +332,7 @@ class BlockedMessageTest(unittest.TestCase):
         message = self.backend._steam_blocked("登録")
 
         self.assertIn("終了", message)
-        self.assertNotIn("Desktop Mode", message)
+        self.assertNotIn("デスクトップモード", message)
 
     def test_steam_state_reports_whether_steam_can_be_quit(self):
         self.steam.session_kind = lambda: self.steam.SESSION_GAMING

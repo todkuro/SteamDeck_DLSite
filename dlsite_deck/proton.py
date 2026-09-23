@@ -40,7 +40,7 @@ def _official_proton_dir(root: Path, key: str) -> Path | None:
     """``proton_experimental`` のような設定名から実体を探す。
 
     設定側は ``proton_8`` / ``proton_experimental`` / ``proton_hotfix`` のような
-    表記で、フォルダ側は ``Proton 8.0`` / ``Proton - Experimental`` /
+    表記で、ディレクトリ側は ``Proton 8.0`` / ``Proton - Experimental`` /
     ``Proton Hotfix``。数字とそれ以外で付き方が違うので両方見る。
     """
     common = root / "steamapps" / "common"
@@ -67,7 +67,7 @@ def _official_proton_dir(root: Path, key: str) -> Path | None:
                     return found
         return None
 
-    # hotfix のような名前。区切りの違いを均して突き合わせる
+    # hotfix のような名前。区切りの違いをそろえて突き合わせる
     def flatten(text: str) -> str:
         return text.lower().replace("-", "").replace("_", "").replace(" ", "")
 
@@ -113,7 +113,7 @@ def resolve_proton(userdata: Path, app_id: int, fallback: str = "") -> Path:
 class PatchExe:
     """当てられるパッチ 1 件。"""
 
-    #: ゲームディレクトリからの相対パス
+    #: ゲームのディレクトリからの相対パス
     relative: str
     #: 実体
     path: Path
@@ -126,7 +126,7 @@ class PatchExe:
         """どのパッチか分かる表示名。
 
         ``追加パッチ/<キャラ名>/patch.exe`` のように
-        フォルダで区別する作りが多いので、フォルダ名まで見せる。
+        ディレクトリで区別する作りが多いので、ディレクトリ名まで見せる。
         """
         return self.relative
 

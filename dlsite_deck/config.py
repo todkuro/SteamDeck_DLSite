@@ -1,7 +1,7 @@
 """設定の読み書きと、プロジェクト外パスの保護。
 
-引継ぎ仕様の制限に合わせ、プロジェクトディレクトリの外へ書き込む場合は
-呼び出し側で明示的な確認を要求できるようにしている (:func:`is_inside_project`)。
+プロジェクトのディレクトリの外へ書き込む場合は、
+呼び出し側で利用者に確認を求められるようにしている (:func:`is_inside_project`)。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import cover
+from .paths import is_within
 
 #: パッケージの 1 つ上がプロジェクトルート
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -37,10 +38,10 @@ class Config:
 
     #: アーカイブの一時置き場 (キャッシュ)。展開後は既定で削除する。
     download_dir: str = str(PROJECT_ROOT / "downloads")
-    #: 既定の展開先。この下に作品ごとのローマ字ディレクトリを作る。
+    #: 既定のインストール先。この下に作品ごとのローマ字のディレクトリを作る。
     #: 必ず install_dirs のどれかと一致する。
     install_dir: str = str(PROJECT_ROOT / "games")
-    #: 選べる展開先の一覧。ダウンロード時にこの中から選ぶ。
+    #: 選べるインストール先の一覧。ダウンロード時にこの中から選ぶ。
     install_dirs: list[str] = field(
         default_factory=lambda: [str(PROJECT_ROOT / "games")]
     )
@@ -50,7 +51,7 @@ class Config:
     cookie_source: str = "firefox"
     #: cookie_source が "manual" のときに読むファイル
     cookie_file: str = str(PROJECT_ROOT / "cookies.txt")
-    #: 展開先ディレクトリ名のテンプレート。{romaji} と {id} が使える。
+    #: 展開先のディレクトリ名のテンプレート。{romaji} と {id} が使える。
     directory_template: str = "{romaji}"
     #: 長音符の扱い。"repeat" で母音を重ね、"drop" で捨てる。
     long_vowel: str = "repeat"
@@ -58,7 +59,7 @@ class Config:
     delete_archives: bool = True
     #: 展開後にバージョン番号を名前から除去するか
     strip_versions: bool = True
-    #: 単一フォルダのみのアーカイブを展開先直下に引き上げるか
+    #: 単一ディレクトリのみのアーカイブを展開先直下に引き上げるか
     flatten_single_root: bool = True
     #: ゲーム以外の作品種別も対象に含めるか
     include_non_games: bool = False
@@ -79,9 +80,9 @@ class Config:
     #: Steam のストア製品はカバーにタイトルが焼き込まれているが、DLsite の画像には
     #: 無いため、そのままではライブラリ一覧でどれがどのゲームか分からない。
     #:
-    #: **既定は環境で決まる。** 描画に使う rsvg-convert と日本語フォントが揃って
-    #: いれば有効、どちらかが欠けていれば無効にする。揃っていない環境で有効に
-    #: しても、豆腐 (□) が並んだカバーができるだけで嬉しくないため。
+    #: **既定は環境で決まる。** 描画に使う rsvg-convert と日本語フォントがそろって
+    #: いれば有効、どちらかが欠けていれば無効にする。そろっていない環境で有効に
+    #: しても、豆腐 (□) が並んだカバーができるだけで意味がないため。
     #: 設定ファイルに書いてあればそちらが優先される。
     steam_cover_title: bool = field(default_factory=lambda: cover.title_supported())
     #: ロゴ画像 (背景に重ねて出る) に何を使うか。
@@ -97,30 +98,38 @@ class Config:
     #: Steam 本体の実行ファイル。「Steam を終了する」で使う。
     #:
     #: 既定は SteamDeck の場所。ここに無い環境 (Windows など) では、PATH と
-    #: Steam のフォルダからも探すので、たいていは既定のままでよい。
+    #: Steam のディレクトリからも探すので、たいていは既定のままでよい。
     steam_executable: str = "/usr/bin/steam"
-    #: 登録時に入れる Steam の起動オプション。空なら設定しない。
+    #: Web UI から新しく登録するゲームに付ける Steam の起動オプション。空なら設定しない。
     #:
     #: 日本語のゲームは、ロケールが無いと表示もファイル名も文字化けする。
     #: SteamOS には ja_JP.UTF-8 が入っていないので、ロケールを用意して
     #: ``LANG=ja_JP.UTF-8 ~/locales/run.sh %command%`` のように渡す必要がある。
     #: 環境によって用意の仕方が違うため、既定は空にして各自で設定してもらう。
+    #:
+    #: 任意のコマンドを書けるので、画面からは変更できない (``LOCKED_CONFIG_KEYS``)。
     steam_launch_options: str = ""
     #: 利用者が書き込みを承認したプロジェクト外のパス。
     #: 一度承認したものは再確認しない。端末の無い起動 (デスクトップの
     #: ショートカットや Steam の非 Steam ゲーム) では確認に答えられないため。
     acknowledged_paths: list[str] = field(default_factory=list)
-    #: 展開ツール (7z / unar / unrar 等) を探す追加ディレクトリ。PATH より優先する。
+    #: 展開ツール (7z / unar / unrar など) と rsvg-convert を探す追加のディレクトリ。PATH より優先する。
     tool_dirs: list[str] = field(default_factory=list)
     #: 除外する作品 ID
     exclude: list[str] = field(default_factory=list)
+    #: Web UI がこの分数のあいだ使われなければ、自動で終了する。0 なら終了しない。
+    #:
+    #: デスクトップモードでは、ブラウザのタブを閉じてもツールは裏で動き続ける。
+    #: 画面を開いている間は画面が合図を送り続けるので終了しない。ダウンロードや
+    #: 展開の途中でも終了しない。
+    idle_shutdown_minutes: int = 30
 
     @property
     def download_path(self) -> Path:
         return Path(self.download_dir).expanduser()
 
     def __post_init__(self) -> None:
-        # 既定の展開先が一覧に無いと、選択欄に出せず設定として矛盾する
+        # 既定のインストール先が一覧に無いと、選択欄に出せず設定として矛盾する
         self.install_dirs = [
             directory for directory in dict.fromkeys(self.install_dirs) if directory.strip()
         ]
@@ -131,18 +140,18 @@ class Config:
 
     @property
     def install_path(self) -> Path:
-        """既定の展開先。"""
+        """既定のインストール先。"""
         return Path(self.install_dir).expanduser()
 
     @property
     def install_paths(self) -> list[Path]:
-        """選べる展開先すべて。"""
+        """選べるインストール先すべて。"""
         return [Path(directory).expanduser() for directory in self.install_dirs]
 
     def resolve_install_dir(self, requested: str | None) -> Path:
-        """要求された展開先を検証して返す。
+        """要求されたインストール先を検証して返す。
 
-        設定にある場所しか受け付けない。UI からは一覧で選ばせるので、
+        設定にある場所しか受け付けない。画面からは一覧で選ばせるので、
         ここで弾かれるのは設定を書き換えた直後などに限られる。
         """
         if not requested:
@@ -219,8 +228,7 @@ def is_inside_project(path: Path) -> bool:
     except OSError:
         return False
 
-    root = PROJECT_ROOT.resolve()
-    return resolved == root or root in resolved.parents
+    return is_within(resolved, PROJECT_ROOT.resolve())
 
 
 def unacknowledged_paths(config: Config) -> list[Path]:
@@ -254,7 +262,7 @@ def external_paths(config: Config) -> list[Path]:
 def steam_userdata_path(config: Config) -> Path | None:
     """Steam の userdata ディレクトリを求める。
 
-    本番は SteamOS だが、Windows での検証用に既定インストール先と
+    Windows では、Steam の既定のインストール先と、
     レジストリに記録されたインストール先も見る。
     """
     if config.steam_userdata_dir:

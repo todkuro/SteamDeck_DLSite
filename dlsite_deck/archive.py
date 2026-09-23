@@ -1,12 +1,12 @@
-"""アーカイブの判定・展開と、展開後のディレクトリ整形。
+"""アーカイブの判定・展開と、展開後のディレクトリの整理。
 
 DLsite の配布物は概ね次の 2 形態:
 
 * 単一の ZIP
-* 旧来の分割自己展開 RAR (先頭が ``.exe``、続きが ``.bin`` / ``.part2`` 等)
+* 旧来の分割自己展開 RAR (先頭が ``.exe``、続きが ``.bin`` / ``.part2`` など)
 
 ZIP は標準ライブラリで扱える。RAR は標準ライブラリでは展開できないため、
-``bsdtar`` / ``7z`` / ``unar`` / ``unrar`` のうち入っているものを使う。
+``unar`` / ``7zz`` / ``7z`` / ``unrar`` / ``bsdtar`` のうち、最初に見つかったものを使う。
 """
 
 from __future__ import annotations
@@ -22,9 +22,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from .paths import is_within
+
 # 展開に使える外部コマンドを優先度順に並べる。
 # 分割 (マルチボリューム) RAR を確実に扱えるものを先に置く。libarchive 系は
-# 分割 RAR を読めないことがあるため後ろに回す。SteamOS には bsdtar が標準で入る。
+# 分割 RAR を読めないことがあるため後ろに回す。SteamOS には 7z・unrar・bsdtar が最初から入っている。
 RAR_TOOLS = (
     ("unar", ["-quiet", "-force-overwrite", "-output-directory", "{dest}", "{archive}"]),
     ("7zz", ["x", "-y", "-o{dest}", "{archive}"]),
@@ -79,6 +81,8 @@ class ExtractResult:
     entries: list[Path]
     flattened: bool
     renamed: list[tuple[Path, Path]] = field(default_factory=list)
+    #: 展開先の外を指していたので取り除いたリンク (アーカイブ内の相対パス)
+    removed_links: list[str] = field(default_factory=list)
 
 
 def plan_archive(files: list[Path]) -> ArchivePlan:
@@ -137,8 +141,8 @@ def extract(
     """アーカイブを ``output_dir`` に展開する。
 
     いったんステージング領域に展開してから中身を移すことで、途中で失敗しても
-    展開先が中途半端な状態にならないようにしている。単一フォルダだけを含む
-    アーカイブは、そのフォルダの中身を展開先直下に引き上げる。
+    展開先が中途半端な状態にならないようにしている。単一ディレクトリだけを含む
+    アーカイブは、そのディレクトリの中身を展開先直下に引き上げる。
     """
     if not plan.is_extractable:
         raise ArchiveError(
@@ -155,6 +159,11 @@ def extract(
         else:
             _extract_split_rar(plan.files, staging)
 
+        # 外部ツールはアーカイブ内のシンボリックリンクをそのまま作ることがある。
+        # 外を指すリンクを残すと、あとで DLC を重ねるときなどにそれをたどって
+        # 作品ディレクトリの外へ書き込んでしまう。移す前に取り除く。
+        removed_links = drop_escaping_links(staging)
+
         root, flattened = _content_root(staging, flatten_single_root)
         entries = _move_contents(root, output_dir)
     finally:
@@ -169,7 +178,47 @@ def extract(
         entries=sorted(output_dir.iterdir()),
         flattened=flattened,
         renamed=renamed,
+        removed_links=removed_links,
     )
+
+
+def drop_escaping_links(root: Path) -> list[str]:
+    """``root`` の外を指すシンボリックリンクを取り除き、その一覧を返す。
+
+    中を指すリンク (Linux 版のゲームにある ``libfoo.so -> libfoo.so.1`` など) は
+    残す。判定はリンク先を実際に解いて行うので、``../`` の重ね掛けや絶対パス、
+    リンクを経由したリンクも見逃さない。行き先が無いリンクも、行き先の文字列を
+    解いた結果が外なら取り除く。
+
+    ZIP は Python の zipfile で展開するのでリンクは作られない。外部ツールで
+    展開する分割 RAR のためにある。
+    """
+    base = root.resolve()
+
+    # 先にすべてのリンクを集め、どれも残っている状態で判定してから消す。
+    # 消しながら判定すると、「中のリンクを経由して外へ出るリンク」が、経由先を
+    # 先に消したせいで中を指すように見えてしまい、結果が辿る順に左右される。
+    links: list[Path] = []
+    for current, dirs, files in os.walk(root, followlinks=False):
+        # ディレクトリへのリンクも dirs に入る。辿らずにここで拾う。
+        for name in [*dirs, *files]:
+            path = Path(current) / name
+            if path.is_symlink():
+                links.append(path)
+
+    escaping = []
+    for path in links:
+        try:
+            target = (path.parent / os.readlink(path)).resolve()
+        except (OSError, RuntimeError):
+            # 解けない (循環など) ものも、中を指すと確かめられないので取り除く
+            target = None
+        if target is None or not is_within(target, base):
+            escaping.append(path)
+
+    for path in escaping:
+        path.unlink()
+    return sorted(str(path.relative_to(root)).replace("\\", "/") for path in escaping)
 
 
 def _extract_zip(archive: Path, staging: Path) -> None:
@@ -345,7 +394,7 @@ def _safe_join(base: Path, entry: str) -> Path:
 
     target = base.joinpath(*parts).resolve()
     root = base.resolve()
-    if target != root and root not in target.parents:
+    if not is_within(target, root):
         raise ArchiveError(f"アーカイブ内のパスが展開先の外を指しています: {entry!r}")
     return target
 
@@ -425,7 +474,7 @@ _VERSION_BARE = re.compile(r"[\s_\-]+\d+\.\d+(?:\.\d+)*[a-z]?$", re.IGNORECASE)
 
 
 def strip_version(name: str, is_dir: bool = False) -> str:
-    """ファイル名・フォルダ名からバージョン番号を取り除く。"""
+    """ファイル名・ディレクトリ名からバージョン番号を取り除く。"""
     stem, extension = (name, "") if is_dir else _split_extension(name)
 
     cleaned = _VERSION_MARKED.sub("", stem)
@@ -445,12 +494,12 @@ def _split_extension(name: str) -> tuple[str, str]:
     return stem, "." + extension
 
 
-#: バージョン番号を取り除く対象の拡張子。実行ファイルとフォルダのみを触る。
+#: バージョン番号を取り除く対象の拡張子。実行ファイルとディレクトリのみを触る。
 VERSION_STRIP_SUFFIXES = {".exe", ".bat", ".sh", ".x86", ".x86_64", ".swf", ".jar"}
 
 
 def strip_version_names(root: Path) -> list[tuple[Path, Path]]:
-    """展開先のフォルダ名と実行ファイル名からバージョン番号を除去する。
+    """展開先のディレクトリ名と実行ファイル名からバージョン番号を除去する。
 
     深い階層から処理することで、親を改名した後に子のパスが変わる問題を避ける。
     """
@@ -507,7 +556,7 @@ class Executable:
     #: 展開先からの相対パス (表示用)
     relative: str
     size: int
-    #: ランチャやアンインストーラらしい名前か
+    #: ランチャーやアンインストーラらしい名前か
     suspicious: bool
 
     @property
@@ -534,7 +583,7 @@ def executable_candidates(root: Path) -> list[Executable]:
         except ValueError:
             relative = path.name
 
-        # 名前だけでなく、どこに入っているかも見る。install 系のフォルダに
+        # 名前だけでなく、どこに入っているかも見る。install 系のディレクトリに
         # 埋まっているものは本体のこともあるが、付属物のことも
         # 多いので、選ぶ前に分かるようにしておく。
         suspicious = bool(_NON_GAME_EXE.search(path.name)) or any(
@@ -565,7 +614,7 @@ def find_executables(root: Path) -> list[Path]:
             parts = ()
         depth = len(parts) if parts or base == root else 99
 
-        # 途中のフォルダ名に除外語があるか。
+        # 途中のディレクトリ名に除外語があるか。
         #
         # 以前はこういう階層を丸ごと掘らずに捨てていたが、ゲーム本体が
         # そこに入っていることがある (実物に
@@ -582,7 +631,7 @@ def find_executables(root: Path) -> list[Path]:
             except OSError:
                 size = 0
 
-            # 名前が紛らわしくない / 除外語のフォルダに埋まっていない /
+            # 名前が紛らわしくない / 除外語のディレクトリに埋まっていない /
             # 浅い / 大きい ものを優先する
             penalty = 1 if _NON_GAME_EXE.search(name) else 0
             candidates.append(((penalty, buried, depth, -size), path))

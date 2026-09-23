@@ -1,4 +1,4 @@
-"""レジューム対応のダウンロード処理。
+"""途中から再開できるダウンロード処理。
 
 作品によっては数 GB になるので、途中で切れても ``.part`` から再開できるように
 している。SteamDeck の Wi-Fi 環境では実際にこれが効く。
@@ -46,7 +46,7 @@ def download_file(
     """1 ファイルをダウンロードする。``.part`` があれば続きから取得する。"""
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # ファイル名はレスポンスヘッダで確定するので、まず 0 バイト目を軽く開く
+    # ファイル名は応答のヘッダーで確定するので、まず 0 バイト目を軽く開く
     part_path: Path | None = None
     offset = 0
 
@@ -68,7 +68,7 @@ def download_file(
     if resume and part_path.exists():
         offset = part_path.stat().st_size
         if total is not None and offset >= total:
-            # 取り切っていたが rename 前に落ちたケース
+            # 取り切っていたが、名前を変える前に止まった場合
             part_path.replace(final_path)
             if progress:
                 progress(name, total, total)
@@ -281,13 +281,6 @@ def ensure_space(path: Path, needed: int, margin: float = 1.2) -> None:
             f"{path} の空き容量が足りません "
             f"(必要 約{format_size(required)} / 空き {format_size(available)})。"
         )
-
-
-def cleanup_partials(directory: Path) -> list[Path]:
-    """途中で放置された .part を列挙する (削除はしない)。"""
-    if not directory.is_dir():
-        return []
-    return sorted(directory.glob("**/*.part"))
 
 
 def remove_files(paths: list[Path]) -> None:

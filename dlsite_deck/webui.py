@@ -1,29 +1,25 @@
-"""ローカル Web UI。
+"""ローカル Web UI の中身。画面から頼まれた処理を実際に行う。
 
-SteamDeck の Desktop Mode はタッチ操作が主なので、一覧の絞り込みや実行ファイルの
-選択はブラウザ上で行えたほうが扱いやすい。標準ライブラリの ``http.server`` だけで
-組んであり、追加の依存はない。
+SteamDeck のデスクトップモードはタッチ操作が主なので、一覧の絞り込みや実行ファイルの
+選択はブラウザ上で行えたほうが扱いやすい。標準ライブラリだけで組んであり、
+追加の依存はない。
 
-待ち受けは 127.0.0.1 のみ。ライブラリの内容も購入情報も外に出さない。
+ここにあるのは処理の中身 (:class:`Backend`) と、設定画面の組み立て方。
+HTTP の受け答えと、他のサイトやプログラムからの要求を締め出す仕組み (合言葉・接続の上限・
+自動終了など) は :mod:`dlsite_deck.server` が受け持つ。
 """
 
 from __future__ import annotations
 
-import gzip
-import json
 import os
 import shutil
-import socket
 import sys
 import threading
 import time
 import traceback
-import urllib.parse
-import webbrowser
 from dataclasses import asdict, dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from . import (
     __version__,
@@ -40,21 +36,30 @@ from . import (
     proton,
     steam,
 )
+from .paths import is_within
+
+if TYPE_CHECKING:
+    # 型の注釈にだけ使う。server は webui を読み込むので、実行時には読み込まない。
+    from http.server import ThreadingHTTPServer
+
+    from .server import IdleWatch
 
 #: 設定画面の組み立て方。順番がそのまま画面の並びになる。
 CONFIG_FIELDS = [
     {"key": "download_dir", "label": "キャッシュ（アーカイブ置き場）", "type": "path",
+     "locked": True,
      "help": "ダウンロードしたアーカイブの一時置き場。展開後は既定で削除する"},
     {"key": "install_dirs", "label": "インストール先の一覧", "type": "list",
-     "help": "1 行に 1 つ。ダウンロード時にこの中から選ぶ"},
+     "help": "1 行に 1 つ。ダウンロード時にこの中から選ぶ。"
+             " 追加できるのは承認済みの場所だけ"},
     {"key": "install_dir", "label": "既定のインストール先", "type": "install_default",
      "help": "上の一覧から選ぶ。ダウンロード画面で最初に選択された状態になる"},
-    {"key": "state_file", "label": "状態ファイル", "type": "path",
+    {"key": "state_file", "label": "状態ファイル", "type": "path", "locked": True,
      "help": "導入済みの記録"},
     {"key": "cookie_source", "label": "Cookie の取得元", "type": "choice",
      "choices": [{"value": "firefox", "label": "Firefox から読む"},
                  {"value": "manual", "label": "書き出したファイルから読む"}]},
-    {"key": "cookie_file", "label": "Cookie ファイル", "type": "path",
+    {"key": "cookie_file", "label": "Cookie ファイル", "type": "path", "locked": True,
      "help": "取得元が「書き出したファイル」のときに読む", "depends": "cookie_source=manual"},
     {"key": "directory_template", "label": "展開先の名前", "type": "text",
      "help": "{romaji} と {id} が使える"},
@@ -62,14 +67,14 @@ CONFIG_FIELDS = [
      "choices": [{"value": "repeat", "label": "母音を重ねる（スーパー→suupaa）"},
                  {"value": "drop", "label": "捨てる（スーパー→supa）"}]},
     {"key": "strip_versions", "label": "名前からバージョン番号を除去", "type": "bool"},
-    {"key": "flatten_single_root", "label": "単一フォルダを展開先直下に引き上げる",
+    {"key": "flatten_single_root", "label": "単一ディレクトリを展開先直下に引き上げる",
      "type": "bool"},
     {"key": "delete_archives", "label": "展開後にアーカイブを削除", "type": "bool"},
     {"key": "include_non_games", "label": "一括取得でゲーム以外も対象にする", "type": "bool"},
     {"key": "register_to_steam", "label": "ダウンロード後に自動で Steam 登録",
      "type": "bool"},
     {"key": "steam_userdata_dir", "label": "Steam の userdata", "type": "path",
-     "help": "空なら自動検出"},
+     "locked": True, "help": "空なら自動検出"},
     {"key": "steam_grid_images", "label": "作品画像を表紙・背景に使う", "type": "bool"},
     {"key": "steam_grid_slots", "label": "画像を設定するスロット", "type": "slots",
      "help": "DLsite の画像は 4:3 なので、縦長のカバーは左右が切れる",
@@ -86,20 +91,49 @@ CONFIG_FIELDS = [
      "button": "カバーを作り直す",
      "help": "上の設定を保存したあとに押す。登録済みのゲームの表紙・背景・ロゴを"
              " 今の設定どおりに作り直し、使わなくなった画像は引き上げる。"
-             " 元の画像は作品フォルダに残してあるので、通常は再ダウンロードしない"},
+             " 元の画像は作品ディレクトリに残してあるので、通常は再ダウンロードしない"},
     {"key": "steam_compat_tool", "label": "登録時に割り当てる Proton", "type": "compat_tool",
      "help": "新しく登録するゲームに適用する。既に割り当て済みのものは変更しない"},
     {"key": "steam_executable", "label": "Steam の実行ファイル", "type": "path",
+     "locked": True,
      "help": "「Steam を終了する」で使う。既定は SteamDeck の場所。"
-             " ここに無ければ PATH と Steam のフォルダからも探す"},
+             " ここに無ければ PATH と Steam のディレクトリからも探す"},
     {"key": "steam_launch_options", "label": "既定の起動オプション", "type": "text",
-     "help": "登録画面の初期値になる。日本語の文字化けを避けるには"
+     "locked": True,
+     "help": "新しく登録するゲームに付ける。日本語の文字化けを避けるには"
              " ロケールを渡す。例: LANG=ja_JP.UTF-8 ~/locales/run.sh %command%"},
     {"key": "tool_dirs", "label": "展開ツールを探す場所", "type": "list",
-     "help": "7z や unrar が PATH に無い場合のディレクトリ。1 行に 1 つ"},
+     "locked": True,
+     "help": "7z や unrar、rsvg-convert が PATH に無い場合のディレクトリ"},
     {"key": "exclude", "label": "対象外にする作品 ID", "type": "list",
      "help": "1 行に 1 つ"},
+    {"key": "idle_shutdown_minutes", "label": "使っていないときに自動で終了する",
+     "type": "minutes",
+     "choices": [{"value": 0, "label": "終了しない"},
+                 {"value": 10, "label": "10 分"},
+                 {"value": 30, "label": "30 分"},
+                 {"value": 60, "label": "1 時間"},
+                 {"value": 120, "label": "2 時間"}],
+     "help": "画面を閉じてからこの時間がたつと終了する。画面を開いている間と、"
+             "ダウンロードや展開の途中は終了しない。次の起動から反映される"},
 ]
+
+#: 画面や API からは変えさせない設定。``config.json`` を直接書き換えたときだけ変わる。
+#:
+#: どれも「場所」か「動かすプログラム」を指す。API を呼べるプロセスがこれを
+#: 変えられると、ツールに任意のプログラムを実行させられる。たとえば Flatpak の
+#: アプリはホームディレクトリを読めなくてもネットワーク越しにここへは届くので、
+#: 自分の書ける場所を ``steam_executable`` や ``tool_dirs`` に入れて実行させたり、
+#: ``download_dir`` に入れてアーカイブを自分の手元に落とさせたりできてしまう。
+#: 起動オプションも同じで、任意のコマンドを Steam に登録できる。
+#: ``acknowledged_paths`` は画面に出していないが、同じ理由で受け付けない。
+#:
+#: ``install_dirs`` だけは画面から変えられるが、承認済みの場所に限る
+#: (:meth:`Backend._check_install_dirs`)。
+LOCKED_CONFIG_KEYS = frozenset(
+    [field_def["key"] for field_def in CONFIG_FIELDS if field_def.get("locked")]
+    + ["acknowledged_paths"]
+)
 
 #: 画像スロットの並びと表示名。設定画面の選択肢と、保存時の検証で共有する。
 GRID_SLOT_LABELS = (
@@ -128,20 +162,9 @@ def _choice_values(key: str) -> list[str]:
 #: ライブラリ取得は時間がかかるので、この秒数だけ結果を使い回す
 LIBRARY_CACHE_SECONDS = 300
 
-#: これを超える応答は gzip で送る
-GZIP_THRESHOLD = 4096
-
-#: 1 回の write で流す最大バイト数
-WRITE_CHUNK = 16384
-
-#: 相手が接続を切ったときに出る例外。
-#: Windows ではセキュリティ製品が loopback を切ることがあり (WinError 10053)、
-#: 応答の途中でこれらが飛んでくる。
-_DISCONNECTED = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
-
 
 class UiError(RuntimeError):
-    """UI からの操作が失敗した。"""
+    """画面からの操作が失敗した。"""
 
     #: 画面で出し分けるための種別。空なら普通のエラーとして出す。
     kind = ""
@@ -169,7 +192,7 @@ class LoginRequired(UiError):
 
 
 def _new_cover_task() -> dict[str, Any]:
-    """カバー作り直しの進み具合の初期値。"""
+    """表紙の作り直しの進み具合の初期値。"""
     return {
         "running": False,
         "done": 0,
@@ -212,7 +235,7 @@ class Job:
     #: 片付けの対象。中止時にここだけを消す。
     cache_dir: Path | None = None
     #: このジョブが新しく作った展開先。既存の導入を消さないよう、
-    #: 元からあったフォルダは片付けの対象にしない。
+    #: 元からあったディレクトリは片付けの対象にしない。
     created_output: Path | None = None
     #: 順番待ちの位置 (1 が次)。表示のために外から入れる。
     queue_position: int | None = None
@@ -254,9 +277,9 @@ class Job:
 
 
 class Backend:
-    """UI からの要求を実処理につなぐ。
+    """画面からの要求を、実際の処理につなぐ。
 
-    HTTP ハンドラは要求ごとに別スレッドで動くので、状態を触る箇所は錠で守る。
+    HTTP ハンドラは要求ごとに別スレッドで動くので、状態を触る箇所はロックで守る。
     """
 
     def __init__(self, cfg: config_module.Config) -> None:
@@ -271,17 +294,19 @@ class Backend:
         self._jobs: dict[int, Job] = {}
         #: 順番待ちの引数。走り出すまで持っておく。
         self._queued_args: dict[int, tuple[api.Work, Path]] = {}
-        #: 順番待ちを捌く担当。同時に 1 本だけ。
+        #: 順番待ちを処理する担当。同時に 1 本だけ。
         self._worker: threading.Thread | None = None
         #: 担当が動いているか。起動の判断は必ず _lock の中で行う。
         self._worker_active = False
-        #: 終了要求を受けたときに畳む相手。serve() が差し込む。
+        #: 終了の要求を受けたときに止める待ち受け。serve() が差し込む。
         self._server: ThreadingHTTPServer | None = None
         self._next_job_id = 1
         #: 同時に走らせるダウンロードは 1 件に絞る
         self._download_lock = threading.Lock()
-        #: カバーの作り直しの進み具合
+        #: 表紙の作り直しの進み具合
         self._cover_task: dict[str, Any] = _new_cover_task()
+        #: 使われていないかの見張り。serve() が差し込む。
+        self.idle: IdleWatch | None = None
 
     # -- セッション ---------------------------------------------------
 
@@ -338,7 +363,7 @@ class Backend:
         """Steam の userdata を返す。無ければ理由を添えて断る。
 
         同じ確認が各所に散っていて、案内の文言が 3 通りに割れていた。
-        ここに寄せて揃える。
+        ここに寄せてそろえる。
         """
         userdata = config_module.steam_userdata_path(self.config)
         if userdata is None:
@@ -377,7 +402,7 @@ class Backend:
         削除されたときに古いまま残る。実ファイルを見れば本当のところが分かる。
 
         Steam が見つからない環境では ``None`` を返す。その場合は判定できないので、
-        呼び出し側は「分からない」として扱うこと (嘘の断定をしない)。
+        呼び出し側は「分からない」として扱うこと (分からないのに断定しない)。
 
         戻り値は ``(AppID, 名前, 別環境の名前)``。3 つ目は、パスから**別の
         プラットフォームのものと確証が持てた**エントリの名前。これはこちらの
@@ -475,7 +500,7 @@ class Backend:
             )
 
         # 既定の並び。手を動かす必要がある順に置く。
-        # 同じ段の中はタイトル順 (画面の他の並べ替えと揃える)。
+        # 同じ段の中はタイトル順 (画面の他の並べ替えとそろえる)。
         items.sort(key=lambda item: (_default_rank(item), item["title"].strip()))
 
         return {
@@ -505,7 +530,7 @@ class Backend:
         混ざっていると読みにくいので分けてある。
 
         有効なセッションが作れた場合は覚えておく。状態画面を開いた直後に
-        一覧を取りに行くとき、もう一度張り直さずに済む。
+        一覧を取りに行くとき、もう一度つなぎ直さずに済む。
         """
         cfg = self.config
 
@@ -537,14 +562,10 @@ class Backend:
 
             try:
                 client = api.DlsiteClient(cookies.to_cookiejar(found))
-                if client.validate_session():
+                # Play 側を張り直せたかどうかは、使う人が意識する必要がないので
+                # 画面では区別しない。
+                if client.validate_session() or client.refresh_session():
                     session_state = {"ok": True, "detail": "有効", "purchases": None}
-                elif client.refresh_session():
-                    session_state = {
-                        "ok": True,
-                        "detail": "張り直して有効",
-                        "purchases": None,
-                    }
                 else:
                     session_state = {
                         "ok": False,
@@ -565,7 +586,7 @@ class Backend:
         return cookie_state, session_state
 
     def status_json(self) -> dict[str, Any]:
-        """CLI の ``check`` と同じ内容を UI 向けに返す。
+        """コマンドラインの ``check`` と同じ内容を、画面向けに返す。
 
         Cookie が無い / セッションが切れている場合もここで分かるようにして、
         端末に戻らなくても対処できるようにする。
@@ -623,7 +644,7 @@ class Backend:
     # -- 設定 ---------------------------------------------------------
 
     def config_json(self) -> dict[str, Any]:
-        """設定の現在値と、UI が編集欄を組み立てるための定義を返す。"""
+        """設定の現在値と、画面が編集欄を組み立てるための定義を返す。"""
         values = asdict(self.config)
         return {
             "path": str(config_module.default_config_path()),
@@ -637,7 +658,9 @@ class Backend:
                 {"key": key, "label": label} for key, label in GRID_SLOT_LABELS
             ],
             "compat_tools": self._compat_tools(),
-            # 「カバーにタイトルを載せる」を入れてよい環境か。
+            # インストール先の一覧に画面から追加できる場所 (承認済みのものだけ)
+            "install_dir_choices": sorted(self._allowed_install_dirs().values()),
+            # 「縦長カバーにタイトルを載せる」を入れてよい環境か。
             # 入れられない場合は理由も返し、画面でその場に出す。
             "cover_title_supported": cover.title_supported(),
             "cover_title_problem": cover.title_support_problem(),
@@ -681,6 +704,19 @@ class Backend:
             if allowed and merged.get(key) not in allowed:
                 raise UiError(message)
 
+        minutes = merged.get("idle_shutdown_minutes")
+        allowed_minutes = {
+            choice["value"]
+            for field_def in CONFIG_FIELDS if field_def["key"] == "idle_shutdown_minutes"
+            for choice in field_def["choices"]
+        }
+        if isinstance(minutes, bool) or minutes not in allowed_minutes:
+            raise UiError(
+                "自動で終了するまでの時間は "
+                + " / ".join(str(value) for value in sorted(allowed_minutes))
+                + " 分から選んでください。"
+            )
+
         allowed_slots = {key for key, _label in GRID_SLOT_LABELS}
         for slot in merged.get("steam_grid_slots", []):
             if slot not in allowed_slots:
@@ -702,18 +738,98 @@ class Backend:
             )
         merged["install_dirs"] = install_dirs
 
+    def _allowed_install_dirs(self) -> dict[str, str]:
+        """画面からインストール先の一覧に入れてよい場所。
+
+        正規化した形をキーに、書き込むときの表記を値にして返す。
+
+        * 端末で承認した場所 (``acknowledged_paths``)
+        * プロジェクトの ``games/`` (既定のインストール先)
+        * いま一覧に入っている場所 (``config.json`` に書かれたもの)
+
+        プロジェクトの中を丸ごと許すと、ツール自身のプログラムが入った
+        ``dlsite_deck/`` までインストール先にできてしまうので、``games/`` に限る。
+        """
+        allowed: dict[str, str] = {}
+        for raw in (
+            *self.config.acknowledged_paths,
+            str(config_module.PROJECT_ROOT / "games"),
+            *self.config.install_dirs,
+        ):
+            if raw and raw.strip():
+                allowed.setdefault(_normalized_dir(raw), raw.strip())
+        return allowed
+
+    def _check_install_dirs(self, values: dict[str, Any]) -> dict[str, Any]:
+        """インストール先の一覧を、承認済みの場所だけに限る。
+
+        他のプログラムが自分の読み書きできる場所をインストール先にすると、
+        ゲームを手元に落とさせて持ち出したり、exe を差し替えたりできる。
+        承認は端末からしか増やせないので、承認済みの場所から選ぶだけなら安全。
+
+        比べるのは**場所そのもの**。「承認済みの場所の中」を許すと
+        ``<承認済み>/../..`` のような指定が通ってしまう。正規化してから
+        完全一致で比べ、書き込むときは承認したときの表記にそろえる。
+        """
+        allowed = self._allowed_install_dirs()
+
+        dirs = values.get("install_dirs")
+        if isinstance(dirs, list):
+            refused, cleaned = [], []
+            for item in dirs:
+                text = str(item).strip()
+                if not text:
+                    continue
+                key = _normalized_dir(text)
+                if key in allowed:
+                    cleaned.append(allowed[key])
+                else:
+                    refused.append(text)
+            if refused:
+                raise UiError(
+                    f"{', '.join(refused)} はインストール先に追加できません。"
+                    " 画面から追加できるのは、承認済みの場所だけです。"
+                    f" 新しい場所は {config_module.default_config_path()} の"
+                    " install_dirs に書き、端末からツールを一度起動して承認してください。"
+                )
+            values["install_dirs"] = cleaned
+
+        # 既定の選択も同じ表記にそろえる (末尾の / の有無などで一覧と食い違わないように)
+        default = values.get("install_dir")
+        if isinstance(default, str) and default.strip():
+            key = _normalized_dir(default)
+            if key in allowed:
+                values["install_dir"] = allowed[key]
+
+        return values
+
     def save_config(self, values: dict[str, Any]) -> dict[str, Any]:
-        """UI から届いた設定を検証して書き出す。"""
+        """画面から届いた設定を検証して書き出す。"""
         known = set(config_module.Config.__dataclass_fields__)
         unknown = sorted(set(values) - known)
         if unknown:
             raise UiError(f"知らない設定項目です: {', '.join(unknown)}")
 
-        merged = asdict(self.config)
+        # 場所とプログラムを指す設定は、ここからは変えさせない (LOCKED_CONFIG_KEYS)。
+        # 画面はこれらを送らないが、今と同じ値なら受け流す。
+        current = asdict(self.config)
+        changed = sorted(
+            key for key in set(values) & LOCKED_CONFIG_KEYS
+            if values[key] != current[key]
+        )
+        if changed:
+            raise UiError(
+                f"{', '.join(changed)} は画面からは変更できません。"
+                f" {config_module.default_config_path()} を直接編集してください。"
+            )
+
+        values = self._check_install_dirs(dict(values))
+
+        merged = current
         merged.update(values)
         self._validate_config(merged)
 
-        # 切り替えたときだけ知らせる。使えない環境で毎回言われても煩いだけ。
+        # 切り替えたときだけ知らせる。使えない環境で毎回知らせても煩わしいだけ。
         warnings = []
         if merged.get("steam_cover_title") and not self.config.steam_cover_title:
             problem = cover.title_support_problem()
@@ -722,9 +838,9 @@ class Backend:
 
         updated = config_module.Config(**merged)
 
-        # 設定画面には外部パスの警告を出しているので、保存した時点で承認とみなす。
-        # そうしないと、端末の無い起動 (デスクトップや Steam から) で毎回止まる。
-        config_module.acknowledge(updated, config_module.external_paths(updated))
+        # 以前はここでプロジェクト外の場所を承認済みにしていたが、やめた。場所は画面から
+        # 自由には変えられなくなった (インストール先は承認済みの場所から選ぶだけ) ので、
+        # 承認は端末から起動したときに利用者が行う。
         path = config_module.save(updated)
 
         self.config = updated
@@ -758,15 +874,15 @@ class Backend:
             " 登録名を変えるか、Steam 側で重複を整理してください。"
         )
 
-    def _current_launch_options(self, entry: state.InstalledWork) -> str:
+    def _current_launch_options(self, entry: state.InstalledWork) -> str | None:
         """既に登録されているショートカットの起動オプションを読む。
 
-        登録し直すときに、Steam 側で設定した内容を画面に出すため。空を返せば
-        呼び出し側が設定の既定値を使う。
+        まだ登録されていなければ ``None``。空の起動オプションで登録済みの
+        場合 (``""``) と区別するため。
         """
         userdata = config_module.steam_userdata_path(self.config)
         if userdata is None:
-            return ""
+            return None
 
         name = entry.steam_title or entry.title
         for config_dir in steam.find_user_config_dirs(userdata):
@@ -776,20 +892,35 @@ class Backend:
                     continue
                 if steam.get_field(existing, "AppName") == name:
                     return str(steam.get_field(existing, "LaunchOptions") or "")
-        return ""
+        return None
+
+    def _launch_options_for(self, entry: state.InstalledWork) -> tuple[str, str]:
+        """登録するときに付く起動オプションと、その出どころ。
+
+        **画面からは指定させない。** 起動オプションには任意のコマンドを書けるので、
+        API を呼べるプロセスに渡すと、次にゲームを遊んだときにそのコマンドが動く。
+        既に登録があれば Steam 側の値を引き継ぎ (名前を変えて登録し直す場合も)、
+        無ければ ``config.json`` の既定値を使う。どちらも利用者が自分で書いたもの。
+        """
+        current = self._current_launch_options(entry)
+        if current is not None:
+            return current, "steam"
+        return self.config.steam_launch_options, "config"
 
     def executables(self, work_id: str) -> dict[str, Any]:
         entry = self._require_installed(work_id)
 
         candidates = archive.executable_candidates(entry.path)
+        launch_options, launch_source = self._launch_options_for(entry)
         return {
             "work_id": work_id,
             "directory": str(entry.path),
             "title": entry.title,
             "steam_title": entry.steam_title or entry.title,
             "selected": entry.executable,
-            "launch_options": self._current_launch_options(entry)
-            or self.config.steam_launch_options,
+            # 表示するだけ。登録のときに画面から送っても使わない。
+            "launch_options": launch_options,
+            "launch_options_source": launch_source,
             "candidates": [
                 {
                     "path": str(item.path),
@@ -804,13 +935,24 @@ class Backend:
 
     # -- 終了 -----------------------------------------------------------
 
+    def is_busy(self) -> bool:
+        """止めてはいけない処理が残っているか。自動で終了するかの判断に使う。"""
+        with self._lock:
+            if any(job.status in ("running", "queued") for job in self._jobs.values()):
+                return True
+            return bool(self._cover_task.get("running"))
+
+    def ping(self) -> dict[str, Any]:
+        """画面からの合図。開いている間は使われているとみなす。"""
+        return {"ok": True, "idle_shutdown_minutes": self.config.idle_shutdown_minutes}
+
     def shutdown(self) -> dict[str, Any]:
-        """待ち受けを畳んで、プロセスを終わらせる。
+        """待ち受けを止めて、プロセスを終わらせる。
 
-        ``server.shutdown()`` は要求を捌いているスレッドから呼ぶと自分の完了を
-        待って固まる。応答を返しきってから別のスレッドで叩く必要がある。
+        ``server.shutdown()`` は要求を処理しているスレッドから呼ぶと自分の完了を
+        待って固まる。応答を返しきってから別のスレッドで呼ぶ必要がある。
 
-        走っている取得があるかは呼び出し側 (画面) が確認して尋ねる。ここまで
+        進行中のダウンロードがあるかは呼び出し側 (画面) が確認して尋ねる。ここまで
         来たら止める。
         """
         server = self._server
@@ -824,7 +966,7 @@ class Backend:
             )
 
         def stop() -> None:
-            # 応答が相手に届くだけの間を置いてから畳む
+            # 応答が相手に届くだけの間を置いてから止める
             time.sleep(0.4)
             server.shutdown()
 
@@ -836,7 +978,7 @@ class Backend:
     def path_warnings(self) -> dict[str, Any]:
         """設定した置き場が実在するかを確かめる。
 
-        SteamDeck では展開先を SD カードに置くのが普通で、カードが外れていたり
+        SteamDeck ではインストール先を SD カードに置くのが普通で、カードが外れていたり
         マウントされていなければ丸ごと見えなくなる。その状態では導入済みの作品が
         一斉に「記録のみ」になり、取り直しを促す表示になってしまう。
         気付けるように、上部で知らせる。
@@ -884,13 +1026,13 @@ class Backend:
         """Steam 起動中で操作できないときの案内。
 
         ゲームモードでは Steam を終了できないので「終了してください」は
-        実行できない指示になる。Desktop Mode へ切り替えてもらう。
+        実行できない指示になる。デスクトップモードへ切り替えてもらう。
         """
         if steam.session_kind() == steam.SESSION_GAMING:
             return (
                 f"ゲームモードでは{action}できません。"
                 " ゲームモードでは Steam を終了できないため、"
-                " Desktop Mode に切り替えて操作してください。"
+                " デスクトップモードに切り替えて操作してください。"
             )
         return (
             f"Steam が起動中のため{action}できません。"
@@ -898,10 +1040,19 @@ class Backend:
             " (起動中に書き換えても Steam の終了時に上書きされます)。"
         )
 
+    def _require_steam_stopped(self, action: str) -> None:
+        """Steam が起動中なら、書き換えずに断る。
+
+        Steam は shortcuts.vdf と config.vdf を抱えたまま動き、終了時に書き戻す。
+        起動中に書き換えても捨てられるので、書き換える操作はここを通す。
+        """
+        if steam.is_steam_running():
+            raise UiError(self._steam_blocked(action))
+
     def steam_state(self) -> dict[str, Any]:
         """Steam が動いているかだけを返す軽い問い合わせ。
 
-        画面の「Steam を終了しました」から押されて、実際のプロセスを見に行く。
+        画面の「Steam を終了しました」を押したときに、実際のプロセスを見に行く。
         起動中は ``config.vdf`` / ``shortcuts.vdf`` への書き込みが Steam 終了時に
         上書きされてしまうため、その間の操作は塞ぐ。
 
@@ -916,7 +1067,7 @@ class Backend:
             "can_quit_steam": session != steam.SESSION_GAMING,
         }
 
-    # -- カバーの作り直し ---------------------------------------------
+    # -- 表紙の作り直し -----------------------------------------------
 
     def cover_task(self) -> dict[str, Any]:
         """作り直しの進み具合。"""
@@ -926,11 +1077,11 @@ class Backend:
     def rebuild_covers(self) -> dict[str, Any]:
         """登録済みゲームのライブラリ画像を、今の設定どおりに作り直す。
 
-        「カバーにタイトルを埋め込む」を切り替えたあと、登録し直さずに
-        反映させるための入口。作るだけでなく、**使わなくなった画像は引き上げる**
+        「縦長カバーにタイトルを載せる」を切り替えたあと、登録し直さずに
+        反映させるための入口。作るだけでなく、**使わなくなった画像は削除する**
         ので、設定を戻せば元の見た目に戻る。
 
-        ストア画像は作品フォルダに残してあるものを使うため、たいていは通信が要らない。
+        ストア画像は作品ディレクトリに残してあるものを使うため、たいていは通信が要らない。
         """
         # userdata が無ければ始める前に断る
         userdata = self._userdata()
@@ -950,7 +1101,7 @@ class Backend:
     def _rebuild_covers(self, userdata: Path) -> None:
         try:
             self._rebuild_covers_inner(userdata)
-        except Exception as error:  # 担当スレッドは何があっても畳む
+        except Exception as error:  # 担当スレッドの中の失敗は、ここですべて受け止めて記録する
             with self._lock:
                 self._cover_task["message"] = f"作り直しに失敗しました: {error}"
         finally:
@@ -973,7 +1124,7 @@ class Backend:
 
         config_dirs = steam.find_user_config_dirs(userdata)
         slots = list(self.config.steam_grid_slots)
-        # 設定から外したスロットは、置いてあるものを引き上げる
+        # 設定から外したスロットは、置いてあるものを削除する
         unused = [slot for slot in steam.GRID_SLOTS if slot != steam.LOGO_SLOT and slot not in slots]
 
         for entry in targets:
@@ -1040,11 +1191,11 @@ class Backend:
                 )
             )
 
-            # 「設定しない」を選んだときだけ引き上げる。
+            # 「設定しない」を選んだときだけ削除する。
             #
             # 作れなかっただけの場合に消してはいけない。rsvg-convert が無い環境や
             # アイコンを持たない exe では作れず、そこで作り直すと、別の環境で
-            # 付けたロゴを黙って剥がしてしまう。
+            # 付けたロゴを知らないうちに消してしまう。
             if not logo and self.config.steam_logo_source == "none":
                 removed += len(
                     steam.remove_grid_images(
@@ -1057,19 +1208,19 @@ class Backend:
         return written, removed, "作り直した"
 
     def stop_steam(self) -> dict[str, Any]:
-        """Steam に終了してもらい、落ちるまで待つ。
+        """Steam に終了してもらい、終了するまで待つ。
 
         ``shortcuts.vdf`` などは Steam が抱えていて終了時に書き戻す。手で
         終わらせてもらう代わりに、ここから頼む。
 
         **ゲームモードでは行わない。** Steam 自身がセッションで、このツールも
-        そこから起動されているため、終了するとツールごと落ちる。
+        そこから起動されているため、終了するとツールも一緒に終了する。
         """
         if steam.session_kind() == steam.SESSION_GAMING:
             raise UiError(
                 "ゲームモードでは Steam を終了できません。"
                 " 終了するとこのツールごと落ちます。"
-                " Desktop Mode に切り替えて操作してください。"
+                " デスクトップモードに切り替えて操作してください。"
             )
 
         if not steam.is_steam_running():
@@ -1088,10 +1239,10 @@ class Backend:
 
         return {
             "running": True,
-            # 終了を頼んでも効かない環境がある。Ubuntu のコンテナで試したところ、
-            # 指示は届いている ("command line was forwarded" がログに出る) のに
-            # Steam 側が畳まなかった。無理に kill すると shortcuts.vdf を
-            # 書き戻す前に死ぬので、手で閉じてもらうよう案内する。
+            # 終了を頼んでも終了しないことがある。Steam がサインイン画面のまま
+            # だと、指示は届いている ("command line was forwarded" がログに出る)
+            # のに終了しなかった (Ubuntu のコンテナで確認)。無理に kill すると
+            # shortcuts.vdf を書き戻す前に止まるので、手で閉じてもらうよう案内する。
             "message": "Steam がまだ終了していません。"
                        " 起動中のゲームがあれば、先に終了してください。"
                        " 環境によっては終了の指示が効かないことがあります。"
@@ -1099,7 +1250,7 @@ class Backend:
                        "「Steam を終了しました」を押してください。",
         }
 
-    # -- 取得したファイルの削除 ------------------------------------------
+    # -- 作品の削除 ------------------------------------------------------
 
     def delete_preview(self, work_id: str) -> dict[str, Any]:
         """削除する前に、何が消えて何が残るかを知らせる。
@@ -1141,7 +1292,7 @@ class Backend:
     def _discard_backups(self, entry: state.InstalledWork) -> tuple[int, int]:
         """その作品が上書きされたときの退避を片付ける。
 
-        戻す先の作品ごと消すので、控えだけ残しても使い道がない。**その作品を
+        戻す先の作品ごと消すので、退避したファイルだけ残しても使い道がない。**その作品を
         名指しした退避だけ**を消し、他の作品のものには触れない。
 
         消す場所はインストール先の中に限る。設定を書き換えて別の場所を
@@ -1159,7 +1310,8 @@ class Backend:
                 resolved = path.resolve()
             except OSError:
                 continue
-            if not any(root in resolved.parents for root in roots):
+            # インストール先そのものではなく、その中にあるものだけを消す
+            if not any(is_within(resolved, root, strict=True) for root in roots):
                 continue
 
             freed += _directory_size(resolved)
@@ -1167,7 +1319,7 @@ class Backend:
             if not resolved.exists():
                 count += 1
 
-        # 空になった入れ物は残さない
+        # 空になったディレクトリは残さない
         root = link.backup_root_dir(entry)
         try:
             if root.is_dir() and not any(root.iterdir()):
@@ -1198,10 +1350,10 @@ class Backend:
 
         if target.is_dir():
             resolved = target.resolve()
-            # 展開先として設定した場所の中にあるものだけを消す。設定を書き換えて
+            # インストール先として設定した場所の中にあるものだけを消す。設定を書き換えて
             # 別の場所を指させても、そこを消してしまわないようにする。
             roots = [root.resolve() for root in self.config.install_paths]
-            if not any(root == resolved or root in resolved.parents for root in roots):
+            if not any(is_within(resolved, root) for root in roots):
                 raise UiError(
                     f"インストール先の外にあるため削除しません: {resolved}"
                 )
@@ -1215,7 +1367,7 @@ class Backend:
                 raise UiError(f"削除しきれませんでした: {resolved}")
 
         # ダウンロードしたアーカイブも片付ける。既定では展開後に消えているが、
-        # 「アーカイブを残す」設定や、途中で失敗した取得の分が残ることがある。
+        # 「展開後にアーカイブを削除」を切った場合や、途中で失敗した取得の分が残ることがある。
         cache = self.config.download_path / work_id
         cached_bytes = 0
         if cache.is_dir():
@@ -1224,21 +1376,26 @@ class Backend:
 
         # DLC を重ねられたときの退避も一緒に消す。
         #
-        # 退避は作品フォルダの隣 (インストール先の直下) にあるので、作品を
-        # 消しただけでは残り続ける。戻す相手が無くなった控えなので連れていく。
+        # 退避は作品ディレクトリの隣 (インストール先の直下) にあるので、作品を
+        # 消しただけでは残り続ける。戻す相手が無くなったので一緒に消す。
         backup_bytes, backup_count = self._discard_backups(entry)
 
-        # この作品に関わる DLC の結び付けも記録から外す。
+        # この作品に関わる DLC の重ね合わせも記録から外す。
         # 既に重ねたファイルは相手側に残るので、それは伝える。
         dropped = [
             item for item in current.links
             if item.source_id == work_id or item.target_id == work_id
         ]
+        # ファイルが残るのは、この作品を DLC として適用済みの相手だけ。この作品が
+        # 重ねられた側なら、重ねたファイルは作品と一緒に消えている。
+        applied = [
+            item for item in dropped
+            if item.source_id == work_id and item.applied_at
+        ]
         left_behind = sorted({
             (current.get(item.target_id).title
              if current.get(item.target_id) else item.target_id)
-            for item in dropped
-            if item.source_id == work_id and item.applied_at
+            for item in applied
         })
         current.links = [item for item in current.links if item not in dropped]
 
@@ -1253,12 +1410,8 @@ class Backend:
             parts.append("(ファイルは既にありませんでした)")
         if backup_count:
             parts.append(f"DLC の退避 {backup_count} 件も片付けました。")
-        if dropped:
-            parts.append(f"DLC の結び付け {len(dropped)} 件も記録から外しました。")
-        if left_behind:
-            parts.append(
-                "重ねたファイルは " + "、".join(left_behind) + " 側に残っています。"
-            )
+        if applied:
+            parts.append(f"{len(applied)} 件の適用済みDLCのファイルはそのまま残っています。")
 
         return {
             "message": " ".join(parts),
@@ -1274,7 +1427,7 @@ class Backend:
         """登録済みゲームと、それぞれに割り当てられている Proton を並べる。
 
         書き込む先は Steam 自身が使う ``config.vdf`` の ``CompatToolMapping``
-        で、設定画面から変えたときと同じ場所・同じ形。実機の 143 件はすべて
+        で、Steam の設定画面から変えたときと同じ場所・同じ形。実機の 143 件はすべて
         ``name`` / ``config`` / ``priority`` の同じ形をしていた。
         """
         userdata = self._userdata()
@@ -1311,7 +1464,7 @@ class Backend:
         }
 
     def set_proton(self, work_id: str, tool: str) -> dict[str, Any]:
-        """1 本の Proton 割り当てを変える。
+        """1 つのゲームの Proton の割り当てを変える。
 
         **Steam が起動中は変更しない。** Steam は ``config.vdf`` を抱えたまま
         動き、終了時に書き戻すので、動作中に書き換えても捨てられる。黙って
@@ -1319,8 +1472,7 @@ class Backend:
         """
         userdata = self._userdata()
 
-        if steam.is_steam_running():
-            raise UiError(self._steam_blocked("Proton の変更が"))
+        self._require_steam_stopped("Proton の変更が")
 
         entry = self._require_entry(work_id)
         if entry.steam_app_id is None:
@@ -1349,10 +1501,10 @@ class Backend:
             "tool": tool,
         }
 
-    # -- DLC の結び付け ------------------------------------------------
+    # -- DLC の重ね合わせ ----------------------------------------------
 
     def link_candidates(self, work_id: str) -> dict[str, Any]:
-        """重ね先の候補を返す。
+        """重ねる相手の候補を返す。
 
         既定では同じ出品者の導入済み作品だけを出す。実ライブラリで確認した
         3 組はいずれも出品者が一致していた。ただし例外に備えて全件も返し、
@@ -1394,7 +1546,7 @@ class Backend:
         except link.LinkError as error:
             raise UiError(str(error)) from error
         if not here.is_dir():
-            raise UiError(f"フォルダではありません: {relative}")
+            raise UiError(f"ディレクトリではありません: {relative}")
 
         directories, files = [], []
         for child in sorted(here.iterdir(), key=lambda p: p.name.lower()):
@@ -1428,7 +1580,7 @@ class Backend:
             target = current.get(item.target_id)
             items.append({
                 # 添字ではなく key で指す。1 件外すと以降の添字がずれるので、
-                # 画面を読み直す前に 2 つ目を押すと別の結び付きに当たってしまう。
+                # 画面を読み直す前に 2 つ目を押すと別の重ね合わせに当たってしまう。
                 "key": item.key,
                 "source_id": item.source_id,
                 "target_id": item.target_id,
@@ -1449,7 +1601,7 @@ class Backend:
         if not source_id or not target_id:
             raise UiError("コピー元とコピー先の両方を選んでください。")
         if source_id == target_id:
-            raise UiError("同じ作品どうしは結び付けられません。")
+            raise UiError("同じ作品同士をDLCとして扱うことはできません。")
 
         mode = str(values.get("mode") or "copy")
         if mode not in ("copy", "symlink"):
@@ -1508,7 +1660,7 @@ class Backend:
         for item in current.links:
             if item.key == key:
                 return item
-        raise UiError("その結び付けは見つかりません。画面を開き直してください。")
+        raise UiError("DLCを適用した情報が見つかりませんでした。画面を開き直してください。")
 
     def revert_link(self, key: str) -> dict[str, Any]:
         current = self.state()
@@ -1537,7 +1689,7 @@ class Backend:
         """パッチとして実行できる exe を並べる。
 
         1 つの作品に 12 個の exe が入っていて、
-        フォルダで区別する作りがある。相対パスをそのまま見せる。
+        ディレクトリで区別する作りがある。相対パスをそのまま見せる。
         """
         current = self.state()
         entry = self._require_installed(work_id, current)
@@ -1551,7 +1703,7 @@ class Backend:
             if other.path.is_dir()
         ]
         # 同じ出品者を先に出す。当てる先はまず同じサークルの本編なので、
-        # 五十音順のまま出すと関係ない作品が初期選択になってしまう。
+        # タイトル順のまま出すと関係ない作品が初期選択になってしまう。
         targets.sort(key=lambda item: (not item["same_maker"], item["title"]))
         return {
             "work_id": work_id,
@@ -1566,7 +1718,7 @@ class Backend:
         }
 
     def run_patch(self, work_id: str, relative: str, target_id: str) -> dict[str, Any]:
-        """パッチ exe を、当てる先のゲームのプレフィックスで実行する。
+        """パッチの exe を、当てる先のゲームのプレフィックスで実行する。
 
         当てる先を別に指定できるのは、パッチが本編とは別の作品として売られて
         いることがあるため (特典セットとして別売りされる形がある)。
@@ -1635,8 +1787,11 @@ class Backend:
         work_id: str,
         executable: str,
         title: str,
-        launch_options: str | None = None,
     ) -> dict[str, Any]:
+        """Steam に登録する。
+
+        起動オプションは引数に取らない (:meth:`_launch_options_for`)。
+        """
         title = title.strip()
         if not title:
             raise UiError("登録するタイトルを入力してください。")
@@ -1648,7 +1803,7 @@ class Backend:
         if not target.is_file():
             raise UiError(f"実行ファイルが見つかりません: {target}")
 
-        # 展開先の外の実行ファイルを登録させない
+        # 作品ディレクトリの外の実行ファイルを登録させない
         try:
             target.resolve().relative_to(entry.path.resolve())
         except ValueError:
@@ -1657,8 +1812,11 @@ class Backend:
             ) from None
 
         userdata = self._userdata()
-        if steam.is_steam_running():
-            raise UiError(self._steam_blocked("登録"))
+        self._require_steam_stopped("登録")
+
+        # 古い登録を片付ける前に読む。名前を変えて登録し直す場合も、Steam で
+        # 設定してあった起動オプションを引き継ぐため。
+        options, _source = self._launch_options_for(entry)
 
         # 改名や exe の変更で AppID が変わるので、古い登録と画像を先に片付ける
         previous_title = entry.steam_title or entry.title
@@ -1673,14 +1831,10 @@ class Backend:
         # 名前が同じという理由でそちらを書き換えてしまう。
         self._refuse_if_foreign(entry, "登録")
 
-        options = (
-            self.config.steam_launch_options
-            if launch_options is None
-            else launch_options
-        ).strip()
-
+        # 既にある登録の起動オプションには触れない。付けるのは新しく作る登録だけ。
         result = install.register_to_steam(
-            self.config, userdata, title, target, image, launch_options=options
+            self.config, userdata, title, target, image,
+            launch_options=options.strip(), keep_launch_options=True,
         )
 
         entry.executable = str(target)
@@ -1701,10 +1855,10 @@ class Backend:
         }
 
     def grid_image(self, entry: state.InstalledWork) -> bytes | None:
-        """ライブラリの表紙・背景に使う画像を取ってくる。
+        """ライブラリの表紙・背景に使う画像を取得する。
 
-        一度取ったものは作品フォルダに残してあるので、まずそちらを見る。
-        カバーを作り直すだけなら通信が要らない。
+        一度取ったものは作品ディレクトリに残してあるので、まずそちらを見る。
+        表紙を作り直すだけなら通信が要らない。
 
         取れなくても登録自体は続けたいので、失敗しても例外にしない。
         """
@@ -1736,8 +1890,7 @@ class Backend:
         entry = self._require_entry(work_id, current)
 
         userdata = self._userdata()
-        if steam.is_steam_running():
-            raise UiError(self._steam_blocked("解除"))
+        self._require_steam_stopped("解除")
 
         self._refuse_if_foreign(entry, "解除")
 
@@ -1777,15 +1930,15 @@ class Backend:
         return {"jobs": jobs, "queued": queued, "running": running}
 
     def _ensure_worker(self) -> None:
-        """順番待ちを捌く担当を 1 本だけ動かす。
+        """順番待ちを処理する担当を 1 本だけ動かす。
 
         同時に何本も走らせない。以前は要求のたびにスレッドを起こしていたため、
         一括取得を押すと表示中の未取得すべて (実ライブラリで 18 本・60 GiB) が
         いっせいに走り、DLsite にも回線にも負担をかけていた。
 
         起動の判断は ``_worker_active`` で行い、担当が「もう仕事が無い」と
-        決める処理と同じ錠の中で見る。別々に見ると、担当が終わりかけている
-        隙に積まれた分が誰にも拾われず、永久に待ち続けることになる。
+        決める処理と同じロックの中で見る。別々に見ると、担当が終わりかけている
+        隙に積まれた分が誰にも処理されず、永久に待ち続けることになる。
         """
         with self._lock:
             if self._worker_active:
@@ -1815,7 +1968,7 @@ class Backend:
                 work, target_root = self._queued_args[job.id]
                 return job, work, target_root
 
-            # 仕事が無いことの確認と、担当を降りる判断を同じ錠の中で行う
+            # 仕事が無いことの確認と、担当を降りる判断を同じロックの中で行う
             self._worker_active = False
             return None
 
@@ -1894,7 +2047,7 @@ class Backend:
             job.current = name
             job.written = written
             job.total = total
-            # 通信の合間に中止を拾う。ここが唯一の割り込み点。
+            # 通信の合間に中止の指示を確かめる。ここが唯一の割り込み点。
             if job.cancel_requested:
                 raise install.Cancelled()
 
@@ -1907,7 +2060,7 @@ class Backend:
                 job.current = "展開中"
 
         try:
-            # 同時に複数を落とすと帯域も進捗表示も破綻するので直列化する
+            # 同時に複数をダウンロードすると帯域も進捗表示も破綻するので、1 本ずつにする
             with self._download_lock:
                 current = self.state()
                 install.install_work(
@@ -1947,7 +2100,7 @@ class Backend:
             job.status = "cancelled"
             job.current = ""
             job.message = "中止しました（" + install.discard_partial(result) + "）"
-        except Exception as error:  # UI に出すので握って記録する
+        except Exception as error:  # 画面に出すので、例外を受け止めて記録する
             job.status = "error"
             job.message = str(error) or error.__class__.__name__
             traceback.print_exc()
@@ -1955,221 +2108,13 @@ class Backend:
             job.finished_at = time.time()
 
 
-# ----------------------------------------------------------------------
-# HTTP
-# ----------------------------------------------------------------------
+def _normalized_dir(value: str) -> str:
+    """場所を比べるための形。``..`` や末尾の区切り、``~`` を解いておく。
 
-
-# ----------------------------------------------------------------------
-# 経路
-# ----------------------------------------------------------------------
-#
-# 以前は if/elif を積み上げていたが、経路が 28 本まで増えて見通しが悪くなった。
-# 「どの URL がどれを呼ぶか」だけの表にしてある。
-
-
-def _q(query: dict[str, list[str]], name: str) -> str:
-    """クエリ文字列から 1 つ取り出す。無ければ空文字。"""
-    return (query.get(name) or [""])[0]
-
-
-def _s(payload: dict[str, Any], name: str) -> str:
-    """本文から文字列として取り出す。無ければ空文字。"""
-    return str(payload.get(name, ""))
-
-
-def _save_config(backend: "Backend", payload: dict[str, Any]) -> dict[str, Any]:
-    values = payload.get("values")
-    if not isinstance(values, dict):
-        raise UiError("設定の内容が不正です。")
-    return backend.save_config(values)
-
-
-#: GET。``(Backend, クエリ)`` を受けて、そのまま JSON にする値を返す。
-GET_ROUTES: dict[str, Callable[["Backend", dict[str, list[str]]], Any]] = {
-    "/api/library": lambda b, q: b.library_json(refresh=_q(q, "refresh") == "1"),
-    "/api/executables": lambda b, q: b.executables(_q(q, "work_id")),
-    "/api/jobs": lambda b, q: b.jobs_json(),
-    "/api/paths": lambda b, q: b.path_warnings(),
-    "/api/steam/covers": lambda b, q: b.cover_task(),
-    "/api/steam/state": lambda b, q: b.steam_state(),
-    "/api/proton": lambda b, q: b.proton_json(),
-    "/api/links": lambda b, q: b.links_json(),
-    "/api/link/candidates": lambda b, q: b.link_candidates(_q(q, "work_id")),
-    "/api/browse": lambda b, q: b.browse(_q(q, "work_id"), _q(q, "path")),
-    "/api/delete/preview": lambda b, q: b.delete_preview(_q(q, "work_id")),
-    "/api/patches": lambda b, q: b.patches(_q(q, "work_id")),
-    "/api/status": lambda b, q: b.status_json(),
-    "/api/config": lambda b, q: b.config_json(),
-}
-
-#: POST。``(Backend, 本文)`` を受ける。
-POST_ROUTES: dict[str, Callable[["Backend", dict[str, Any]], Any]] = {
-    "/api/download": lambda b, p: b.start_download(
-        _s(p, "work_id"),
-        str(p["install_dir"]) if p.get("install_dir") else None,
-    ),
-    "/api/download/cancel": lambda b, p: b.cancel_download(int(p.get("job_id", 0))),
-    "/api/steam/register": lambda b, p: b.register_steam(
-        _s(p, "work_id"),
-        _s(p, "executable"),
-        _s(p, "title"),
-        launch_options=(
-            None if p.get("launch_options") is None else str(p["launch_options"])
-        ),
-    ),
-    "/api/steam/unregister": lambda b, p: b.unregister_steam(_s(p, "work_id")),
-    "/api/steam/covers/rebuild": lambda b, p: b.rebuild_covers(),
-    "/api/steam/stop": lambda b, p: b.stop_steam(),
-    "/api/delete": lambda b, p: b.delete_work(_s(p, "work_id")),
-    "/api/shutdown": lambda b, p: b.shutdown(),
-    "/api/proton/set": lambda b, p: b.set_proton(_s(p, "work_id"), _s(p, "tool")),
-    "/api/link/preview": lambda b, p: b.preview_link(p),
-    "/api/link/apply": lambda b, p: b.apply_link(p),
-    "/api/link/revert": lambda b, p: b.revert_link(_s(p, "key")),
-    "/api/link/remove": lambda b, p: b.remove_link(_s(p, "key")),
-    "/api/patch/run": lambda b, p: b.run_patch(
-        _s(p, "work_id"), _s(p, "relative"), _s(p, "target_id")
-    ),
-    "/api/config": _save_config,
-}
-
-
-class Handler(BaseHTTPRequestHandler):
-    backend: Backend  # サーバー生成時に差し込む
-
-    server_version = "dlsite_deck"
-    sys_version = ""
-
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        # 既定の実装は毎リクエストを stderr に出すので黙らせる
-        pass
-
-    # -- 送信 ---------------------------------------------------------
-
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
-        encoding = None
-
-        # ライブラリ一覧は 80KB 前後になる。圧縮すると 1 割程度に縮み、
-        # 大きな応答で詰まる環境 (Windows のセキュリティ製品が loopback を
-        # 覗く場合など) を避けられる。
-        if len(body) > GZIP_THRESHOLD and "gzip" in self.headers.get("Accept-Encoding", ""):
-            body = gzip.compress(body, compresslevel=6)
-            encoding = "gzip"
-
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        if encoding:
-            self.send_header("Content-Encoding", encoding)
-        # ローカル専用なので外部への埋め込みや参照を許さない
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-
-        if self.command == "HEAD":
-            return
-
-        # 一度に大量に流すと詰まる環境があるので小分けにする
-        view = memoryview(body)
-        for start in range(0, len(view), WRITE_CHUNK):
-            self.wfile.write(view[start : start + WRITE_CHUNK])
-
-    def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._send(status, body, "application/json; charset=utf-8")
-
-    def _send_error_json(
-        self,
-        message: str,
-        status: int = 400,
-        kind: str = "",
-        steps: tuple[str, ...] = (),
-    ) -> None:
-        payload: dict[str, Any] = {"error": message}
-        if kind:
-            payload["error_kind"] = kind
-        if steps:
-            payload["error_steps"] = list(steps)
-        self._send_json(payload, status=status)
-
-    def _send_safe_error(self, message: str) -> None:
-        """エラー応答自体が失敗しても握りつぶす。
-
-        接続が既に切れている場合、エラーを返そうとするとそこでも例外が出る。
-        本来の失敗はログに出ているので、ここでは静かに諦める。
-        """
-        try:
-            self._send_error_json(message, status=500)
-        except _DISCONNECTED:
-            pass
-
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0:
-            return {}
-        if length > 1_000_000:
-            raise UiError("要求が大きすぎます。")
-        try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise UiError(f"要求を解釈できませんでした: {error}") from error
-
-    # -- 経路 ---------------------------------------------------------
-
-    def _dispatch(self, route: Callable[[], None]) -> None:
-        """経路の処理を包み、失敗を UI に返せる形に揃える。
-
-        GET と POST で同じ後始末が要る。別々に書くと片方だけ直して
-        食い違うので、例外の扱いはここ一箇所にまとめてある。
-        """
-        try:
-            route()
-        except _DISCONNECTED:
-            # 相手が切った後にエラー応答を書こうとすると二重に失敗する
-            return
-        except UiError as error:
-            self._send_error_json(
-                str(error), kind=error.kind, steps=error.steps
-            )
-        except Exception as error:  # 予期しない失敗も UI に返す
-            traceback.print_exc()
-            self._send_safe_error(f"内部エラー: {error}")
-
-    def do_GET(self) -> None:  # noqa: N802
-        self._dispatch(self._get)
-
-    def do_POST(self) -> None:  # noqa: N802
-        self._dispatch(self._post)
-
-    def _get(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-
-        if parsed.path == "/":
-            self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
-            return
-
-        route = GET_ROUTES.get(parsed.path)
-        if route is None:
-            self._send_error_json("見つかりません", status=404)
-            return
-
-        self._send_json(route(self.backend, urllib.parse.parse_qs(parsed.query)))
-
-    def _post(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-
-        # 経路が無くても本文は読み切っておくこと。読まずに応答を返すと、
-        # 残った本文が次の要求の先頭として解釈されて接続が壊れる。
-        payload = self._read_json()
-
-        route = POST_ROUTES.get(parsed.path)
-        if route is None:
-            self._send_error_json("見つかりません", status=404)
-            return
-
-        self._send_json(route(self.backend, payload))
+    シンボリックリンクは辿らない。承認は「利用者が書いたその場所」に対して
+    行われたものなので、同じ表記かどうかだけを見る。
+    """
+    return os.path.normcase(os.path.normpath(os.path.expanduser(value.strip())))
 
 
 def _is_registered(
@@ -2220,11 +2165,11 @@ _REMOVABLE_ROOTS = ("/run/media", "/media", "/mnt")
 #: 画面の「状態」順とは意図が違うので別に持つ。あちらは状態の重さの順、
 #: こちらは「次に何をすればよいか」の順。
 _DEFAULT_RANK = {
-    "unregistered": 0,  # 取得したのに Steam に載せていない。次にやること
+    "unregistered": 0,  # 取得したのに Steam に登録していない。次にやること
     "outdated": 1,      # 更新が出ている
     "missing": 2,       # まだ取得していない
     "done": 3,          # 登録済み / 更新不明。やることは無い
-    "record_only": 4,   # 記録だけ残っている (SD カードが外れている等)
+    "record_only": 4,   # 記録だけ残っている (SD カードが外れているなど)
     "foreign": 5,       # 別環境と重複。こちらからは触れないので最後
 }
 
@@ -2234,7 +2179,7 @@ def _default_rank(item: dict[str, Any]) -> int:
     if item["steam_foreign"]:
         return _DEFAULT_RANK["foreign"]
     if item["installed"]:
-        # Steam 登録の話はゲームだけ。マンガや音声を「未登録」に混ぜない。
+        # Steam 登録の話はゲームだけ。マンガやボイスを「未登録」に混ぜない。
         if item["category"] == "game" and item["steam_registered"] is False:
             return _DEFAULT_RANK["unregistered"]
         if item["outdated"]:
@@ -2247,11 +2192,7 @@ def _default_rank(item: dict[str, Any]) -> int:
 
 def _is_under(path: Path, root: Path) -> bool:
     """``path`` が ``root`` の下にあるか。実在しなくても文字列で判断する。"""
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
+    return is_within(path, root)
 
 
 def _looks_removable(path: Path) -> bool:
@@ -2279,233 +2220,3 @@ def _directory_size(path: Path) -> int:
     return total
 
 
-def _is_loopback(host: str) -> bool:
-    """自分自身にだけ開いているか。"""
-    return host in ("127.0.0.1", "localhost", "::1", "") or host.startswith("127.")
-
-
-#: 応答の Server ヘッダに入れている名前。自分の実体かどうかの判別に使う。
-SERVER_NAME = "dlsite_deck"
-
-
-def probe_port(host: str, port: int, timeout: float = 1.0) -> str:
-    """待ち受け状況を調べる。
-
-    戻り値は ``"free"`` / ``"ours"`` / ``"other"``。既に自分が動いている場合と、
-    無関係のプログラムが使っている場合とで、利用者に伝えることが違うため区別する。
-    """
-    target = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
-
-    try:
-        connection = socket.create_connection((target, port), timeout=timeout)
-    except OSError:
-        # 繋がらない = 誰も使っていない
-        return "free"
-
-    # 繋がった時点で「誰かが使っている」ことは確定。あとは相手が自分かどうか。
-    # HTTP で応答しない相手 (無関係のサービス) を空きと誤判定しないよう、
-    # 読み取りの失敗は "other" として扱う。
-    with connection:
-        try:
-            connection.sendall(
-                b"HEAD / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-            )
-            head = connection.recv(512).decode("latin-1", errors="replace")
-        except OSError:
-            return "other"
-
-    return "ours" if SERVER_NAME.lower() in head.lower() else "other"
-
-
-def _ancestors(pid: int) -> set[int]:
-    """自分から辿れる親プロセスの一覧。
-
-    ``timeout`` や起動用のシェルは自分の祖先なので、別インスタンスとして
-    数えてはいけない。
-    """
-    chain = {pid}
-    current = pid
-
-    for _ in range(24):  # 壊れた親子関係で回り続けないための上限
-        try:
-            stat = Path(f"/proc/{current}/stat").read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            break
-        # "pid (comm) state ppid ..." の形。comm に空白や括弧が入りうるので
-        # 最後の ')' より後ろを見る。
-        tail = stat.rpartition(")")[2].split()
-        if len(tail) < 2 or not tail[1].isdigit():
-            break
-        current = int(tail[1])
-        if current <= 1 or current in chain:
-            break
-        chain.add(current)
-
-    return chain
-
-
-def _is_serve_process(args: list[str]) -> bool:
-    """引数の並びが ``python -m dlsite_deck ... serve`` かどうか。
-
-    コマンドラインに文字列が含まれるだけでは判定しない。それだと、この判定を
-    起動したシェル自身まで拾ってしまう。
-    """
-    if "serve" not in args:
-        return False
-
-    for index, value in enumerate(args):
-        if value == "-m" and index + 1 < len(args) and args[index + 1] == "dlsite_deck":
-            return True
-        # スクリプトを直接指した場合
-        if value.endswith("__main__.py") and "dlsite_deck" in value:
-            return True
-
-    return False
-
-
-def find_other_instances() -> list[tuple[int, str]]:
-    """同じツールの別プロセスを探す。
-
-    2 つ動くと state.json を同時に書き替えうるので、見つけたら知らせる。
-    ``/proc`` が無い環境では調べられないので空を返す。
-    """
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return []
-
-    skip = _ancestors(os.getpid())
-    found = []
-
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        if pid in skip:
-            continue
-
-        try:
-            raw = (entry / "cmdline").read_bytes()
-        except OSError:
-            continue
-
-        args = [part for part in raw.decode("utf-8", errors="replace").split("\x00") if part]
-        if _is_serve_process(args):
-            found.append((pid, " ".join(args)[:100]))
-
-    return found
-
-
-def serve(
-    cfg: config_module.Config,
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    open_browser: bool = True,
-) -> int:
-    """Web UI を起動する。Ctrl-C で終了。
-
-    起動できなかった場合は、理由を出して 1 を返す（例外は投げない）。
-    """
-    url = f"http://{host if host else '127.0.0.1'}:{port}/"
-
-    # 起動前の確認。塞がっていれば、何が使っているかを見てから諦める。
-    occupied = probe_port(host, port)
-    if occupied == "ours":
-        print(f"既に起動しています: {url}", file=sys.stderr)
-        print("  ブラウザでそのまま開けます。", file=sys.stderr)
-        print("  止めるには、動いている方の端末で Ctrl-C を押してください。", file=sys.stderr)
-        return 1
-    if occupied == "other":
-        print(f"ポート {port} は別のプログラムが使っています。", file=sys.stderr)
-        print(f"  別のポートを指定してください: --port {port + 1}", file=sys.stderr)
-        return 1
-
-    # ポートは空いていても、別ポートで動いている同居インスタンスは危ない。
-    # state.json を同時に書き替えると記録が壊れる。
-    others = find_other_instances()
-    if others:
-        print("警告: このツールが既に別プロセスで動いています。", file=sys.stderr)
-        for pid, command in others[:3]:
-            print(f"  PID {pid}: {command}", file=sys.stderr)
-        print(
-            "  2 つ同時に動かすと state.json の記録が壊れることがあります。",
-            file=sys.stderr,
-        )
-        print("  不要な方を終了してください。", file=sys.stderr)
-        print(file=sys.stderr)
-
-    backend = Backend(cfg)
-    handler = type("BoundHandler", (Handler,), {"backend": backend})
-
-    try:
-        server = ThreadingHTTPServer((host, port), handler)
-    except OSError as error:
-        # 確認から実際の bind までの間に取られることもある
-        print(f"待ち受けを開始できませんでした: {host}:{port}", file=sys.stderr)
-        print(f"  {error}", file=sys.stderr)
-        print(f"  別のポートを指定してください: --port {port + 1}", file=sys.stderr)
-        return 1
-
-    # 画面の「終了」から畳めるようにする
-    backend._server = server
-
-    url = f"http://{host}:{server.server_port}/"
-
-    if not _is_loopback(host):
-        # 認証機構が無いので、外部に開くと購入履歴の閲覧もダウンロード操作も
-        # 誰でもできてしまう。止めはしないが、黙って開かない。
-        print()
-        print("=" * 70, file=sys.stderr)
-        print(
-            f"警告: {host} で待ち受けます。このツールに認証機構はありません。",
-            file=sys.stderr,
-        )
-        print(
-            "      到達できる相手は誰でも、購入済み作品の一覧を見て、",
-            file=sys.stderr,
-        )
-        print(
-            "      ダウンロードや Steam への登録を実行できます。",
-            file=sys.stderr,
-        )
-        print(
-            "      信頼できないネットワークでは 127.0.0.1 のまま使ってください。",
-            file=sys.stderr,
-        )
-        print("=" * 70, file=sys.stderr)
-        print()
-
-    print(f"Web UI を起動しました: {url}")
-    print("終了するには画面右上の「終了」を押すか、Ctrl-C を押してください。")
-
-    if open_browser:
-        threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
-
-    try:
-        server.serve_forever()
-        # 画面の「終了」から畳んだ場合はここに来る
-        print("終了しました。")
-    except KeyboardInterrupt:
-        print("\n終了します。")
-    finally:
-        server.server_close()
-
-
-#: 画面そのもの。HTML・CSS・JavaScript をまとめて持つ。
-#:
-#: Python の文字列として埋め込んでいた時期があったが、``\n`` のような
-#: エスケープが Python 側で解釈されてしまい、JavaScript の文字列が壊れる事故が
-#: 何度か起きた。字面のまま扱える別ファイルに置いている。
-PAGE_PATH = Path(__file__).with_name("page.html")
-
-
-def _load_page() -> str:
-    try:
-        return PAGE_PATH.read_text(encoding="utf-8")
-    except OSError as error:  # 配置漏れは起動時に分かるようにする
-        raise RuntimeError(
-            f"画面ファイルを読めませんでした: {PAGE_PATH}\n"
-            "  dlsite_deck ディレクトリごと配置されているか確認してください。"
-        ) from error
-
-
-PAGE = _load_page()

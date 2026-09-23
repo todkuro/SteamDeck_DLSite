@@ -136,7 +136,7 @@ class Shortcut:
     def to_vdf(self) -> dict[str, Any]:
         # キーの綴りは実際に Steam が書き出すものに合わせてある
         # (appname / exe / openvr は小文字。VDF のキーは大小を区別しないが、
-        #  差分を出さないために揃えておく)
+        #  差分を出さないためにそろえておく)
         return {
             "appid": _to_signed32(self.app_id),
             "appname": self.app_name,
@@ -278,7 +278,7 @@ def shortcut_platform(exe: str) -> str:
 def is_foreign_shortcut(entry: dict[str, Any]) -> bool:
     """このエントリが、今動いている環境とは別のプラットフォームのものか。
 
-    判別できないものは「よそのもの」とはみなさない。確証が持てるときだけ
+    判別できないものは「別環境のもの」とはみなさない。確証が持てるときだけ
     弾く方が、誤って自分の登録を無視してしまう事故を避けられる。
     """
     kind = shortcut_platform(str(get_field(entry, "Exe") or ""))
@@ -295,7 +295,7 @@ def upsert_shortcut(
     """ショートカットを追加、または同じ AppName のものを差し替える。
 
     既存を差し替える場合は識別と起動に関わる項目だけを書き換え、``icon`` や
-    ``sortas`` などユーザーが Steam 上で設定した内容には触れない。
+    ``sortas`` など利用者が Steam 上で設定した内容には触れない。
 
     ``LaunchOptions`` は ``set_launch_options`` を指示したときだけ書き換える。
     日本語のゲームはロケールを渡さないと文字化けするため、ツールから設定
@@ -373,7 +373,7 @@ def steam_executable(
     """Steam 本体の実行ファイルを探す。
 
     設定で指定された場所を最優先する。既定は SteamDeck の ``/usr/bin/steam``
-    だが、そこに無い環境 (Windows など) のために PATH と Steam のフォルダも見る。
+    だが、そこに無い環境 (Windows など) のために PATH と Steam のディレクトリも見る。
     設定が的外れでも動くようにしておきたいので、無ければ黙って次を試す。
     """
     if configured:
@@ -398,12 +398,12 @@ def shutdown_steam(
     timeout: float = 90.0,
     configured: str = "",
 ) -> bool:
-    """Steam に行儀よく終わってもらい、落ちるまで待つ。
+    """Steam 自身に終了してもらい、終了するまで待つ。
 
     ``-shutdown`` は Steam 自身に後片付けをさせてから終わらせる。``pkill`` で
-    落とすと ``shortcuts.vdf`` などを書き戻す前に死ぬことがあるので使わない。
+    強制終了すると ``shortcuts.vdf`` などを書き戻す前に止まることがあるので使わない。
 
-    落ちたら ``True``。時間内に落ちなければ ``False``。
+    終了したら ``True``。時間内に終了しなければ ``False``。
     """
     executable = steam_executable(userdata, configured)
     if executable is None:
@@ -419,7 +419,7 @@ def shutdown_steam(
             timeout=30,
         )
     except subprocess.TimeoutExpired:
-        # 指示そのものは届いている見込みなので、落ちるかどうかで判断する
+        # 指示そのものは届いている見込みなので、終了するかどうかで判断する
         pass
     except OSError as error:
         raise SteamError(f"Steam を終了できませんでした: {error}") from error
@@ -458,7 +458,7 @@ def _running_commands() -> set[str]:
     return found
 
 
-#: Desktop Mode を受け持つもの (SteamOS は Plasma)
+#: デスクトップモードを受け持つもの (SteamOS は Plasma)
 _DESKTOP_COMMANDS = frozenset(
     {"plasmashell", "kwin_wayland", "kwin_x11", "startplasma-way", "startplasma-wayland"}
 )
@@ -467,8 +467,8 @@ _DESKTOP_COMMANDS = frozenset(
 def session_from_commands(commands: set[str]) -> str:
     """動いているプロセス名からセッション種別を決める。
 
-    ゲームモードは ``gamescope`` が、Desktop Mode は Plasma が受け持つ。
-    実機の Desktop Mode では gamescope が動いていないことを確認済み。
+    ゲームモードは ``gamescope`` が、デスクトップモードは Plasma が受け持つ。
+    実機のデスクトップモードでは gamescope が動いていないことを確認済み。
     """
     if not commands:
         return SESSION_UNKNOWN
@@ -483,19 +483,19 @@ def session_kind() -> str:
     """SteamOS のどちらのセッションで動いているか。
 
     ゲームモードでは **Steam を終了できない**。Steam 自身がセッションであり、
-    このツールも Steam から起動されているため、終了すればツールごと落ちる。
+    このツールも Steam から起動されているため、終了すればツールも一緒に終了する。
     つまり ``shortcuts.vdf`` / ``config.vdf`` を書き換える操作は、ゲームモードでは
     どうやっても行えない。「Steam を終了してください」という案内はそこでは
     実行不可能な指示になるので、区別して案内を変えるために使う。
     """
     if sys.platform == "win32":
-        # 開発・検証用。ゲームモードという概念が無いので常に終了できる。
+        # Windows にはゲームモードが無いので、常に終了できる。
         return SESSION_DESKTOP
     return session_from_commands(_running_commands())
 
 
 def _is_steam_running_windows() -> bool:
-    """Windows で開発・検証するとき用の判定。"""
+    """Windows での判定。"""
     try:
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq steam.exe", "/NH"],
@@ -569,7 +569,7 @@ def _grid_extension(data: bytes) -> str:
 
 
 def _grid_paths(directory: Path, app_id: int, suffix: str) -> list[Path]:
-    """あるスロットについて、拡張子違いを含む全てのパスを返す。"""
+    """あるスロットについて、拡張子違いを含むすべてのパスを返す。"""
     stem = f"{app_id & 0xFFFFFFFF}{suffix}"
     return [directory / (stem + extension) for extension in GRID_EXTENSIONS]
 
@@ -648,7 +648,7 @@ def remove_grid_images(
     """置いた画像を片付ける。
 
     ``slots`` を省くと全部消す (登録解除や改名のとき)。指定すればその種類だけ消す
-    (設定を切り替えて、使わなくなった画像を引き上げるとき)。
+    (設定を切り替えて、使わなくなった画像を削除するとき)。
     """
     directory = grid_dir(config_dir)
     if not directory.is_dir():
@@ -687,7 +687,7 @@ def compat_config_path(userdata: Path) -> Path:
 
 
 def _official_proton_key(directory_name: str) -> str | None:
-    """``Proton 8.0`` のようなフォルダ名から、設定に書く名前を求める。
+    """``Proton 8.0`` のようなディレクトリ名から、設定に書く名前を求める。
 
     Valve は ``Proton 8.0`` を ``proton_8``、``Proton 5.13`` を ``proton_513``
     のように綴る。Experimental と Hotfix だけ別扱い。
@@ -719,7 +719,7 @@ def list_compat_tools(userdata: Path) -> list[dict[str, str]]:
     root = userdata.parent
     tools: dict[str, str] = {}
 
-    # 追加した互換ツール (GE-Proton など)。フォルダ名がそのまま設定名になる。
+    # 追加した互換ツール (GE-Proton など)。ディレクトリ名がそのまま設定名になる。
     for base in (root / "compatibilitytools.d", root.parent / "compatibilitytools.d"):
         if not base.is_dir():
             continue
@@ -883,7 +883,7 @@ _COMPAT_SECTION_PATH = ("InstallConfigStore", "Software", "Valve", "Steam")
 def _find_section(text: str, names: Iterable[str]) -> int | None:
     """入れ子をたどって、目的のブロックの ``{`` の位置を返す。
 
-    同じ名前が他所にも出るので、上から順に範囲を狭めながら探す。
+    同じ名前が他の場所にも出るので、上から順に範囲を狭めながら探す。
     """
     start, end = 0, len(text)
     brace = -1
@@ -977,6 +977,7 @@ def register(
     logo: bytes | None = None,
     compat_tool: str = "",
     cover_image: bytes | None = None,
+    keep_launch_options: bool = False,
 ) -> RegistrationResult:
     """全ユーザーの shortcuts.vdf に登録する。
 
@@ -986,16 +987,21 @@ def register(
 
     ``cover_image`` を渡した場合、縦長カバーだけはそちらを使う。タイトルを載せた
     カバーは 2:3 に作ってあり、横長カプセルや背景に流用すると比率が合わないため。
+
+    ``keep_launch_options`` を立てると、``launch_options`` は新しく追加する登録に
+    だけ使い、既にある登録の起動オプションには触れない。Web UI からの登録は
+    こちらを使う (起動オプションを画面から変えさせないため)。
     """
     shortcut = build_shortcut(app_name, executable, launch_options=launch_options or "")
     result = RegistrationResult(app_id=shortcut.app_id)
+    overwrite = launch_options is not None and not keep_launch_options
 
     for config_dir in find_user_config_dirs(userdata):
         path = config_dir / "shortcuts.vdf"
         document = load_shortcuts(path)
         # 起動オプションは、指示されたときだけ書き換える (空にする指示も含む)
         _app_id, created = upsert_shortcut(
-            document, shortcut, set_launch_options=launch_options is not None
+            document, shortcut, set_launch_options=overwrite
         )
         backup = save_shortcuts(path, document)
 

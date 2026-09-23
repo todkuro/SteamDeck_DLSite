@@ -1,4 +1,4 @@
-"""DLC を本編に結び付けて、ファイルを重ねる。
+"""DLC を本編に重ねる。
 
 DLsite の API には DLC を示す情報も、本編への参照も無い。実際に購入済みの
 193 件を調べた範囲では ``work_type`` も ``purchase_type`` も本編と DLC で
@@ -11,7 +11,7 @@ DLsite の API には DLC を示す情報も、本編への参照も無い。実
 * 本編 ← DLC     … DLC 全体を本編の直下へ (exe を含む 8 個上書き)
 * 本編 ← 続編     … **本編の** ``<章>/Content`` を **続編の** ``Content`` へ
 
-3 例目は方向が逆で、しかも本編の一部フォルダだけが対象になる。この違いを
+3 例目は方向が逆で、しかも本編の一部ディレクトリだけが対象になる。この違いを
 吸収するため、関係は「どの作品のどのパスを、どの作品のどのパスへ」という
 4 項目で持つ。
 """
@@ -26,15 +26,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import state as state_module
+from .paths import is_within
 
 
-#: 結び付きの記録そのものは state に置いてある (保存の都合)。
+#: 重ね合わせの記録そのものは state に置いてある (保存の都合)。
 #: こちらの名前でも参照できるようにしておく。
 Link = state_module.LinkRecord
 
 
 class LinkError(RuntimeError):
-    """結び付けの失敗。"""
+    """重ね合わせの失敗。"""
 
 
 def resolve_inside(entry: state_module.InstalledWork, relative: str) -> Path:
@@ -48,7 +49,7 @@ def resolve_inside(entry: state_module.InstalledWork, relative: str) -> Path:
         return root
 
     candidate = (root / relative).resolve()
-    if candidate != root and root not in candidate.parents:
+    if not is_within(candidate, root):
         raise LinkError(f"作品ディレクトリの外を指しています: {relative}")
     return candidate
 
@@ -66,10 +67,6 @@ class ApplyPlan:
     additions: list[str] = field(default_factory=list)
     #: 置くファイルの合計バイト数
     total_bytes: int = 0
-
-    @property
-    def is_directory(self) -> bool:
-        return self.source.is_dir()
 
     def summary(self) -> str:
         return (
@@ -97,9 +94,12 @@ def plan(current: state_module.State, item: Link) -> ApplyPlan:
         raise LinkError(f"コピー元が見つかりません: {source}")
 
     result = ApplyPlan(link=item, source=source, target=target)
+    guard = _LinkGuard(src_entry, dst_entry)
 
     if source.is_file():
         destination = target / source.name if target.is_dir() else target
+        guard.check(source, destination, destination.name)
+        guard.raise_if_escaping()
         entry = destination.name
         (result.overwrites if destination.exists() else result.additions).append(entry)
         result.total_bytes = source.stat().st_size
@@ -111,20 +111,77 @@ def plan(current: state_module.State, item: Link) -> ApplyPlan:
             relative = full.relative_to(source)
             destination = target / relative
             text = str(relative).replace("\\", "/")
+            guard.check(full, destination, text)
             (result.overwrites if destination.exists() else result.additions).append(text)
             try:
                 result.total_bytes += full.stat().st_size
             except OSError:
                 pass
 
+    # 1 つでも外に出るものがあれば、何も書かないうちに断る。下見の時点で分かる。
+    guard.raise_if_escaping()
+
     result.overwrites.sort()
     result.additions.sort()
     return result
 
 
-#: 上書きされたファイルの退避先。作品フォルダの**隣**に置く。
+def _inside(root: Path, path: Path) -> bool:
+    """``path`` を (リンクを解いて) 辿った先が ``root`` の中か。
+
+    まだ無い場所も、途中までの実在する部分のリンクは解いて判定する。
+    """
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return is_within(resolved, root)
+
+
+class _LinkGuard:
+    """重ね合わせで、シンボリックリンクを辿って作品の外に出ないようにする。
+
+    作品の中に外を指すリンクがあると、コピー元なら外のファイル (Firefox の
+    Cookie など) を読んでコピーしてしまい、コピー先なら外に書き込んでしまう。
+    展開時にも取り除いているが (``archive.drop_escaping_links``)、手で置いた
+    ものや、この対策より前に展開したものは残っているので、ここでも確かめる。
+    """
+
+    def __init__(self, src_entry, dst_entry) -> None:
+        self.src_root = src_entry.path.resolve()
+        self.dst_root = dst_entry.path.resolve()
+        self.escaping: list[str] = []
+
+    def check(self, source: Path, destination: Path, label: str) -> None:
+        if not _inside(self.src_root, source):
+            self.escaping.append(label)
+            return
+        # 置き場のディレクトリを辿った先と、上書きされる既存ファイル (退避のために
+        # 読む) の両方を見る。
+        if not _inside(self.dst_root, destination.parent):
+            self.escaping.append(label)
+            return
+        # コピー元の作品を指すリンクは、前に「シンボリックリンクにする」で重ねた
+        # ときにこのツールが置いたもの。重ね直せるように認める。
+        if destination.is_symlink() and not (
+            _inside(self.dst_root, destination) or _inside(self.src_root, destination)
+        ):
+            self.escaping.append(label)
+
+    def raise_if_escaping(self) -> None:
+        if not self.escaping:
+            return
+        shown = ", ".join(sorted(self.escaping)[:5])
+        more = f" ほか {len(self.escaping) - 5} 件" if len(self.escaping) > 5 else ""
+        raise LinkError(
+            "作品ディレクトリの外を指すシンボリックリンクを経由するため、重ねられません: "
+            f"{shown}{more}"
+        )
+
+
+#: 上書きされたファイルの退避先。作品ディレクトリの**隣**に置く。
 #:
-#: 中に置くと、重ねた相手を取り直したときに一緒に消えてしまう。
+#: 中に置くと、重ねた相手をダウンロードし直したときに一緒に消えてしまう。
 BACKUP_DIR_NAME = ".dlsite_backup"
 
 
@@ -134,12 +191,12 @@ def backup_root_dir(entry: state_module.InstalledWork) -> Path:
 
 
 def _backup_dir(item: Link, target_entry: state_module.InstalledWork) -> Path:
-    """その結び付き専用の退避先。**毎回おなじ場所**を返す。
+    """その重ね合わせ専用の退避先。**毎回おなじ場所**を返す。
 
     以前は適用のたびに日時で新しい世代を作っていたが、重ね直すたびに増える
     うえ、2 世代目以降の中身は「前回の DLC が当たったあとの姿」で、本当に
-    戻したい手つかずの原本は最古の 1 つにしかなかった。結び付きごとに 1 つに
-    固定し、控えるのを先勝ちにすることで (:func:`_place`)、ここには常に
+    戻したい手つかずの原本は最古の 1 つにしかなかった。重ね合わせごとに 1 つに
+    固定し、退避を先勝ちにすることで (:func:`_place`)、ここには常に
     原本だけが入る。
     """
     digest = hashlib.sha1(item.key.encode("utf-8")).hexdigest()[:12]
@@ -172,14 +229,14 @@ def apply(
     item: Link,
     backup: bool = True,
 ) -> ApplyPlan:
-    """結び付けを実際に適用する。
+    """重ね合わせを実際に適用する。
 
     上書きされる既存ファイルは、既定で退避してから置き換える。DLC の適用は
     本体の exe まで差し替えることがあり (実物にそういう DLC があった)、
     やり直せる余地を残しておきたいため。
 
-    同じ結び付けを重ねて適用しても退避は増えない。置き場は結び付きごとに
-    1 つで、既に控えのあるファイルは控え直さない。
+    同じ重ね合わせを何度適用しても退避は増えない。置き場は重ね合わせごとに
+    1 つで、退避済みのファイルは退避し直さない。
     """
     result = plan(current, item)
     target_entry = current.get(item.target_id)
@@ -222,7 +279,7 @@ def _place(
     if destination.exists() or destination.is_symlink():
         if backup_dir is not None:
             saved = backup_dir / relative
-            # 先勝ち。2 回目以降の適用で控え直すと、原本が「1 回目の DLC が
+            # 先勝ち。2 回目以降の適用で退避し直すと、原本が「1 回目の DLC が
             # 当たったあとの姿」に置き換わってしまう。最初の 1 つを守る。
             if not saved.exists():
                 saved.parent.mkdir(parents=True, exist_ok=True)
@@ -234,7 +291,7 @@ def _place(
             destination.symlink_to(source)
             return
         except OSError:
-            # 対応していない場所ならコピーに落とす
+            # 対応していない場所ならコピーに切り替える
             pass
 
     shutil.copy2(source, destination)
@@ -244,7 +301,8 @@ def revert(current: state_module.State, item: Link) -> str:
     """退避したファイルを書き戻す。
 
     退避には手つかずの原本だけが入っているので、何度重ね直したあとでも
-    上書きされる前の姿に戻る。
+    上書きされる前の姿に戻る。「シンボリックリンクにする」で重ねた分も、
+    ツールが置いたリンクを外してから元のファイルに戻す。
 
     DLC が新しく置いたファイルまでは消さない。退避の中身だけではどれが DLC 由来か
     区別できず、消しすぎる方が害が大きいため。上書きされた分を元に戻すだけに留める。
@@ -261,15 +319,53 @@ def revert(current: state_module.State, item: Link) -> str:
         raise LinkError(f"コピー先 {item.target_id} が導入されていません。")
     target = resolve_inside(target_entry, item.target_path)
 
-    restored = 0
+    pairs = []
     for base, _dirs, files in os.walk(backup_dir):
         for name in files:
             saved = Path(base) / name
             relative = saved.relative_to(backup_dir)
-            destination = target / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(saved, destination)
-            restored += 1
+            pairs.append((saved, target / relative))
+
+    # 「シンボリックリンクにする」で重ねた場合、本編のファイルはコピー元の作品を
+    # 指すリンクに置き換わっている。これはこのツールが置いたものなので、外して
+    # から元のファイルを戻す (下の _placed_link)。
+    source_entry = current.get(item.source_id)
+    source_root = source_entry.path.resolve() if source_entry is not None else None
+
+    def _placed_link(destination: Path) -> bool:
+        return (
+            source_root is not None
+            and destination.is_symlink()
+            and _inside(source_root, destination)
+        )
+
+    # 書き戻す先がリンクを辿って作品の外に出るなら、何も書かないうちに断る。
+    # copy2 は書き込み先がリンクだとその先へ書くので、ファイル自体も見る。
+    root = target_entry.path.resolve()
+    escaping = sorted(
+        str(destination.relative_to(target)).replace("\\", "/")
+        for _saved, destination in pairs
+        if not _inside(root, destination.parent)
+        or (
+            destination.is_symlink()
+            and not _placed_link(destination)
+            and not _inside(root, destination)
+        )
+    )
+    if escaping:
+        raise LinkError(
+            "作品ディレクトリの外を指すシンボリックリンクを経由するため、書き戻せません: "
+            + ", ".join(escaping[:5])
+        )
+
+    restored = 0
+    for saved, destination in pairs:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if _placed_link(destination):
+            # リンクのまま書くと、辿った先の DLC 側のファイルを上書きしてしまう
+            destination.unlink()
+        shutil.copy2(saved, destination)
+        restored += 1
 
     item.applied_at = None
     return f"{restored} 個を書き戻しました。"
