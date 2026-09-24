@@ -1,6 +1,7 @@
-"""登録済みゲームの Proton プレフィックス内で exe を動かす。
+"""登録済みゲームの Proton プレフィックス内で exe (と msi) を動かす。
 
-``patch.exe`` を実行して当てる形のパッチがある。Steam に登録した
+``patch.exe`` を実行して当てる形のパッチや、ゲームに入れるランタイム・コーデックの
+インストーラ (共通パッチ置き場に置いたもの) を扱う。Steam に登録した
 非 Steam ゲームにも専用のプレフィックスが作られる (実機では 137 件中 135 件に
 存在した。残りは未起動のもの) ので、そこを指定すれば Windows 用のパッチを
 そのまま実行できる。
@@ -14,6 +15,7 @@ proton_experimental / GE-Proton10-10 / Proton-GE Latest / proton_7 などが
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,38 +115,36 @@ def resolve_proton(userdata: Path, app_id: int, fallback: str = "") -> Path:
 class PatchExe:
     """当てられるパッチ 1 件。"""
 
-    #: ゲームのディレクトリからの相対パス
+    #: 探したディレクトリからの相対パス。``追加パッチ/<キャラ名>/patch.exe`` のように
+    #: ディレクトリで区別する作りが多いので、画面にもこれをそのまま見せる。
     relative: str
     #: 実体
     path: Path
     size: int = 0
-    #: 既に実行したか
-    applied: bool = False
-
-    @property
-    def label(self) -> str:
-        """どのパッチか分かる表示名。
-
-        ``追加パッチ/<キャラ名>/patch.exe`` のように
-        ディレクトリで区別する作りが多いので、ディレクトリ名まで見せる。
-        """
-        return self.relative
 
 
-#: パッチではないと分かっているもの
+#: 作品の中を探すときに外す、ゲームに同梱された再頒布ランタイムなど。
+#: 共通パッチ置き場では外さない (find_patches の keep_runtimes)。
+#: アンインストーラ ("unins") は、どこを探すときも外す。
 _NOT_PATCH = (
-    "unins", "uninstall", "setup_dx", "dxsetup", "vcredist", "directx",
+    "setup_dx", "dxsetup", "vcredist", "directx",
     "dotnet", "oalinst", "redist", "crashhandler", "crashreport",
 )
 
 
-def find_patches(directory: Path, applied: list[str] | None = None) -> list[PatchExe]:
-    """ディレクトリ以下の exe を、パッチ候補として列挙する。
+#: 実行できるものの拡張子。.msi は msiexec を通して実行する。
+PATCH_SUFFIXES = (".exe", ".msi")
 
-    どれがパッチかは中身からは分からないので、絞り込みすぎない。明らかに
-    パッチでないもの (アンインストーラや再頒布ランタイム) だけ外す。
+
+def find_patches(directory: Path, keep_runtimes: bool = False) -> list[PatchExe]:
+    """ディレクトリ以下の exe と msi を、パッチ候補として列挙する。
+
+    どれがパッチかは中身からは分からないので、絞り込みすぎない。作品の中を探す
+    ときは、明らかにパッチでないもの (アンインストーラや再頒布ランタイム) だけ外す。
+
+    ``keep_runtimes`` を立てると、再頒布ランタイムも外さない。共通パッチ置き場は、
+    まさにそれを入れるために置いた場所なので。
     """
-    done = set(applied or ())
     found: list[PatchExe] = []
 
     if not directory.is_dir():
@@ -153,10 +153,13 @@ def find_patches(directory: Path, applied: list[str] | None = None) -> list[Patc
     for base, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for name in files:
-            if not name.lower().endswith(".exe"):
-                continue
             lowered = name.lower()
-            if any(mark in lowered for mark in _NOT_PATCH):
+            if not lowered.endswith(PATCH_SUFFIXES):
+                continue
+            if "unins" in lowered:
+                # アンインストーラは、どこに置いてあっても当てるものではない
+                continue
+            if not keep_runtimes and any(mark in lowered for mark in _NOT_PATCH):
                 continue
             full = Path(base) / name
             try:
@@ -164,9 +167,7 @@ def find_patches(directory: Path, applied: list[str] | None = None) -> list[Patc
             except OSError:
                 size = 0
             relative = str(full.relative_to(directory)).replace("\\", "/")
-            found.append(
-                PatchExe(relative=relative, path=full, size=size, applied=relative in done)
-            )
+            found.append(PatchExe(relative=relative, path=full, size=size))
 
     found.sort(key=lambda item: item.relative)
     return found
@@ -182,6 +183,8 @@ class RunResult:
     stderr: str = ""
     proton: str = ""
     prefix: str = ""
+    #: 使った起動オプション。使わなかったなら空。
+    launch_options: str = ""
 
     @property
     def ok(self) -> bool:
@@ -193,6 +196,21 @@ class RunResult:
         return f"{self.exe} が終了コード {self.returncode} で終わりました。"
 
 
+#: 起動オプションの中で、実行するコマンドに置き換わる印 (Steam と同じ)
+COMMAND_MARK = "%command%"
+
+#: Proton のプレフィックスの中の msiexec。名前だけでは終了コードが返らない (run_exe を参照)。
+MSIEXEC = r"C:\windows\system32\msiexec.exe"
+
+
+def windows_path(path: Path) -> str:
+    """Proton (Wine) から見たパス。Linux の / は Z: に割り当てられている。"""
+    text = path.as_posix()
+    if text.startswith("/"):
+        return "Z:" + text.replace("/", "\\")
+    return str(path)
+
+
 def run_exe(
     userdata: Path,
     app_id: int,
@@ -201,12 +219,21 @@ def run_exe(
     args: list[str] | None = None,
     timeout: float = 1800.0,
     fallback_tool: str = "",
+    launch_options: str = "",
 ) -> RunResult:
-    """ゲームのプレフィックスで exe を実行する。
+    """ゲームのプレフィックスで exe を実行する。msi なら msiexec に渡す。
 
     インストーラ形式のパッチは対話操作を求めることがある。その場合は画面が
     出るので、SteamDeck ならデスクトップモードで操作することになる。
+
+    ``launch_options`` を渡すと、Steam がゲームを起動するときと同じように、その中の
+    ``%command%`` を実行するコマンドに置き換えて、シェルを通して実行する。
+    ``LANG=ja_JP.UTF-8 ~/locales/run.sh %command%`` のような設定があれば、パッチも
+    同じ言語で動き、日本語のインストーラの文字化けを避けられる。``%command%`` の無い
+    ものは受け付けない (Steam では引数としてゲームに渡る形で、パッチには当てはまらない)。
     """
+    if launch_options and COMMAND_MARK not in launch_options:
+        raise ProtonError(f"起動オプションに {COMMAND_MARK} がありません: {launch_options}")
     if not exe.is_file():
         raise ProtonError(f"実行ファイルが見つかりません: {exe}")
 
@@ -222,7 +249,21 @@ def run_exe(
     environment["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(steam_root(userdata))
     environment["STEAM_COMPAT_DATA_PATH"] = str(prefix)
 
-    command = [str(proton), "run", str(exe)] + list(args or [])
+    if exe.suffix.lower() == ".msi":
+        # msi はそれだけでは動かない。Wine の msiexec に渡す。Proton は / を Z: に
+        # 割り当てているので、Windows の形のパスにして渡す。
+        #
+        # msiexec は**フルパスで**指定する。名前だけ ("msiexec") で渡すと、Proton は
+        # インストールに失敗しても終了コード 0 を返し、失敗を「実行済み」と記録して
+        # しまう (Proton-GE で、壊れた msi・存在しない msi のどちらも 0 だった)。
+        command = [str(proton), "run", MSIEXEC, "/i", windows_path(exe)]
+    else:
+        command = [str(proton), "run", str(exe)]
+    command += list(args or [])
+    if launch_options:
+        # 起動オプションは利用者が Steam か config.json に書いたもの。画面からは
+        # 変えられない (webui._launch_options_for)。Steam と同じくシェルで解釈する。
+        command = ["/bin/sh", "-c", launch_options.replace(COMMAND_MARK, shlex.join(command))]
     try:
         completed = subprocess.run(
             command,
@@ -248,4 +289,5 @@ def run_exe(
         stderr=(completed.stderr or "")[-4000:],
         proton=str(proton),
         prefix=str(prefix),
+        launch_options=launch_options,
     )

@@ -19,6 +19,8 @@ python3 -m dlsite_deck init
 | `download_dir` 🔒 | `<project>/downloads` | ダウンロードしたアーカイブを一時的に置く場所 |
 | `install_dirs` | `["<project>/games"]` | 選べるインストール先の一覧。Web UI から追加できるのは承認済みの場所だけです |
 | `install_dir` | `<project>/games` | 既定のインストール先。`install_dirs` のどれかを指定します |
+| `runtime_dirs` | `["<project>/runtimes"]` | 共通パッチ置き場。ランタイムやコーデックのインストーラー（exe・msi）を置くと、どのゲームにも「パッチ」から実行できます（[DLC とパッチ](dlc.md#共通パッチ置き場ランタイムコーデック)）。隠しディレクトリ（`.` で始まるもの）とその中は指定できません |
+| `import_dirs` | `["<project>/imports"]` | 自由登録で取り込むアーカイブやディレクトリを置く場所。画面ではこの中だけを選べます。取り込んだあとのアーカイブは画面から削除できます。隠しディレクトリ（`.` で始まるもの）とその中は指定できません |
 | `state_file` 🔒 | `<project>/state.json` | 導入済みの作品の記録を保存する場所 |
 | `cookie_source` | `firefox` | Cookie の読み取り元。`manual` にすると、書き出した Cookie のファイルを読みます |
 | `cookie_file` 🔒 | `<project>/cookies.txt` | `cookie_source` が `manual` のときに読むファイル |

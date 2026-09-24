@@ -222,7 +222,7 @@ class PersistenceTest(unittest.TestCase):
             current = state.State(path)
             current.works["RJ1"] = state.InstalledWork(
                 id="RJ1", title="本編", directory=str(Path(name) / "g"),
-                applied_patches=["patch/a.exe"],
+                installed_patches=["work:RJ2:patch/a.exe"],
             )
             current.links.append(state.LinkRecord(
                 source_id="RJ2", target_id="RJ1", source_path="", target_path="",
@@ -234,7 +234,7 @@ class PersistenceTest(unittest.TestCase):
             self.assertEqual(len(again.links), 1)
             self.assertEqual(again.links[0].source_id, "RJ2")
             self.assertEqual(again.links[0].note, "DLC")
-            self.assertEqual(again.works["RJ1"].applied_patches, ["patch/a.exe"])
+            self.assertEqual(again.works["RJ1"].installed_patches, ["work:RJ2:patch/a.exe"])
 
     def test_old_state_without_links_still_loads(self):
         with tempfile.TemporaryDirectory() as name:
@@ -244,7 +244,7 @@ class PersistenceTest(unittest.TestCase):
                 ' "directory": "/tmp/x"}]}', encoding="utf-8")
             again = state.State.load(path)
             self.assertEqual(again.links, [])
-            self.assertEqual(again.works["RJ1"].applied_patches, [])
+            self.assertEqual(again.works["RJ1"].installed_patches, [])
 
 
 if __name__ == "__main__":

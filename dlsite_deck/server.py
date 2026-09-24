@@ -103,6 +103,11 @@ GET_ROUTES: dict[str, Callable[["Backend", dict[str, list[str]]], Any]] = {
     "/api/patches": lambda b, q: b.patches(_q(q, "work_id")),
     "/api/status": lambda b, q: b.status_json(),
     "/api/config": lambda b, q: b.config_json(),
+    "/api/local": lambda b, q: b.local_json(),
+    "/api/local/browse": lambda b, q: b.local_browse(
+        _q(q, "root"), _q(q, "path"), _q(q, "mode")
+    ),
+    "/api/local/names": lambda b, q: b.local_names(_q(q, "title")),
 }
 
 
@@ -129,10 +134,25 @@ POST_ROUTES: dict[str, Callable[["Backend", dict[str, Any]], Any]] = {
     "/api/link/apply": lambda b, p: b.apply_link(p),
     "/api/link/revert": lambda b, p: b.revert_link(_s(p, "key")),
     "/api/link/remove": lambda b, p: b.remove_link(_s(p, "key")),
+    # 共通パッチ置き場のものは、場所ではなく置き場の番号とその中の相対パスで受け取る
     "/api/patch/run": lambda b, p: b.run_patch(
-        _s(p, "work_id"), _s(p, "relative"), _s(p, "target_id")
+        _s(p, "work_id"), _s(p, "relative"), _s(p, "target_id"),
+        source=_s(p, "source") or "work", root=_s(p, "root"), args=_s(p, "args"),
+        # 送られてこなければ使う (既定)。false のときだけ外す。
+        use_launch_options=p.get("use_launch_options") is not False,
+    ),
+    # ゲームの中の exe (設定用のアプリなど) を、そのゲームの Proton 環境で実行する
+    "/api/run": lambda b, p: b.run_game_exe(
+        _s(p, "work_id"), _s(p, "relative"), args=_s(p, "args"),
+        use_launch_options=p.get("use_launch_options") is not False,
     ),
     "/api/config": _save_config,
+    # 取り込み元は番号と相対パスで受け取る。場所そのものは受け取らない (local を参照)。
+    "/api/local/import": lambda b, p: b.start_local_import(p),
+    "/api/local/archive/delete": lambda b, p: b.delete_local_archive(_s(p, "work_id")),
+    "/api/local/image": lambda b, p: b.set_local_image(
+        _s(p, "work_id"), _s(p, "root"), _s(p, "path")
+    ),
 }
 
 

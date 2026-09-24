@@ -161,11 +161,18 @@ class FindPatchesTest(unittest.TestCase):
         for unwanted in ("unins000.exe", "redist/vcredist_x86.exe", "DXSETUP.exe"):
             self.assertNotIn(unwanted, names)
 
-    def test_applied_ones_are_marked(self):
-        done = ["特典パッチ/bonuspatch.exe"]
-        found = proton.find_patches(self.root, applied=done)
-        marked = [item.relative for item in found if item.applied]
-        self.assertEqual(marked, done)
+    def test_runtimes_are_kept_in_the_shared_store(self):
+        """共通パッチ置き場は、ランタイムを入れるための場所なので外さない。"""
+        names = [item.relative for item in proton.find_patches(self.root, keep_runtimes=True)]
+        self.assertIn("redist/vcredist_x86.exe", names)
+        self.assertIn("DXSETUP.exe", names)
+        # アンインストーラは、どこにあっても当てるものではない
+        self.assertNotIn("unins000.exe", names)
+
+    def test_msi_is_listed(self):
+        (self.root / "codec.msi").write_bytes(b"x")
+        names = [item.relative for item in proton.find_patches(self.root)]
+        self.assertIn("codec.msi", names)
 
     def test_missing_directory_is_empty_not_an_error(self):
         self.assertEqual(proton.find_patches(self.root / "ない"), [])

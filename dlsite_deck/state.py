@@ -1,4 +1,7 @@
-"""ダウンロード済み作品の記録と、バージョンアップ検出。
+"""導入済み作品の記録と、バージョンアップ検出。
+
+記録には、DLsite から取得した作品と、「自由登録」で取り込んだ DLsite 以外の
+ゲーム (``origin`` が ``"local"``) の両方が入る。更新の検出は DLsite の作品だけ。
 
 DLsite Play の作品メタデータには ``upgrade_date`` があり、これが導入時より
 新しければ更新が出ている。バージョン番号そのものは API から取れないため、
@@ -18,6 +21,13 @@ from typing import Iterable
 from .api import Work
 
 STATE_VERSION = 1
+
+#: DLsite のライブラリから取得した作品
+ORIGIN_DLSITE = "dlsite"
+#: 「自由登録」で取り込んだ作品 (DLsite 以外のゲーム)
+ORIGIN_LOCAL = "local"
+#: 自由登録の作品 ID の頭。DLsite の作品 ID (RJ…) とぶつからない形にする。
+LOCAL_ID_PREFIX = "LOCAL-"
 
 
 @dataclass
@@ -44,12 +54,31 @@ class InstalledWork:
     image_url: str | None = None
     #: シリアルコードが必要な作品は、そのコードをここに記録する
     serial_numbers: list[list[str]] = field(default_factory=list)
-    #: 実行済みのパッチ exe (作品ディレクトリからの相対パス)
-    applied_patches: list[str] = field(default_factory=list)
+    #: このゲームに当てたパッチ。どの exe を実行したかを、出どころ付きの鍵で持つ
+    #: (``work:<作品ID>:<相対パス>`` か ``runtime:<共通パッチ置き場の中の場所>``)。
+    #:
+    #: 以前は ``applied_patches`` として**パッチの側**に「実行したか」だけを持って
+    #: いたが、どのゲームに当てたかが分からず、1 つを多くのゲームに入れるランタイムには
+    #: 使えなかった。古い記録は読み込まない (捨てる)。
+    installed_patches: list[str] = field(default_factory=list)
+    #: どこから来た作品か。"dlsite" は DLsite のライブラリ、"local" は「自由登録」で
+    #: 取り込んだもの (DLsite 以外のゲーム)。
+    origin: str = ORIGIN_DLSITE
+    #: 自由登録で取り込んだ元の場所 (アーカイブかディレクトリ)
+    source: str | None = None
+    #: 取り込んだ元の種類。"archive" か "directory"。
+    source_kind: str | None = None
+    #: Steam に登録するときに割り当てる Proton。None なら設定の既定値を使う。
+    compat_tool: str | None = None
 
     @property
     def path(self) -> Path:
         return Path(self.directory)
+
+    @property
+    def is_local(self) -> bool:
+        """「自由登録」で取り込んだ作品か。DLsite に問い合わせてはいけない。"""
+        return self.origin == ORIGIN_LOCAL
 
 
 @dataclass
@@ -191,6 +220,21 @@ class State:
         )
         self.works[work.id] = entry
         return entry
+
+    def next_local_id(self, reserved: Iterable[str] = ()) -> str:
+        """自由登録の作品に振る、まだ使われていない ID。
+
+        ``reserved`` には、順番待ちなどでまだ記録に載っていない ID を渡す。
+        今ある番号の最大の次を振る。作品を消すと、その作品の退避なども一緒に
+        片付くので、あとで同じ番号を振り直しても混ざらない。
+        """
+        taken = set(self.works) | set(reserved)
+        numbers = [
+            int(item[len(LOCAL_ID_PREFIX):])
+            for item in taken
+            if item.startswith(LOCAL_ID_PREFIX) and item[len(LOCAL_ID_PREFIX):].isdigit()
+        ]
+        return f"{LOCAL_ID_PREFIX}{max(numbers, default=0) + 1:04d}"
 
     def forget(self, work_id: str) -> InstalledWork | None:
         return self.works.pop(work_id, None)

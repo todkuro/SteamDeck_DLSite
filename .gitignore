@@ -12,6 +12,10 @@ cookies.txt
 downloads/
 games/
 games*/
+# 自由登録で取り込むアーカイブの置き場
+imports/
+# 共通パッチ置き場 (ランタイムやコーデックのインストーラ)
+runtimes/
 
 # 作業中に取った控え
 backups/

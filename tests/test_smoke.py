@@ -219,8 +219,13 @@ class RoutingTest(unittest.TestCase):
             def remove_link(self, key):
                 return self._record("remove_link", key)
 
-            def run_patch(self, work_id, relative, target_id):
-                return self._record("run_patch", work_id, relative, target_id)
+            def run_game_exe(self, work_id, relative, args="", use_launch_options=True):
+                return self._record("run_game_exe", work_id, relative, args, use_launch_options)
+
+            def run_patch(self, work_id, relative, target_id, source="work", root="", args="",
+                          use_launch_options=True):
+                return self._record("run_patch", work_id, relative, target_id, source, root, args,
+                                    use_launch_options)
 
             def boom(self):
                 raise RuntimeError("想定外")
@@ -316,7 +321,22 @@ class RoutingTest(unittest.TestCase):
             ("/api/patch/run",
              {"work_id": "VJ100002", "relative": "特典パッチ/bonuspatch.exe",
               "target_id": "VJ100001"},
-             ("run_patch", ("VJ100002", "特典パッチ/bonuspatch.exe", "VJ100001"))),
+             ("run_patch", ("VJ100002", "特典パッチ/bonuspatch.exe", "VJ100001", "work", "", "",
+                            True))),
+            ("/api/patch/run",
+             {"work_id": "RJ1", "relative": "vc/vcredist_x64.exe", "target_id": "RJ1",
+              "source": "runtime", "root": 0, "args": "/quiet"},
+             ("run_patch", ("RJ1", "vc/vcredist_x64.exe", "RJ1", "runtime", "0", "/quiet", True))),
+            ("/api/run", {"work_id": "RJ1", "relative": "Tools/Config.exe"},
+             ("run_game_exe", ("RJ1", "Tools/Config.exe", "", True))),
+            ("/api/run", {"work_id": "RJ1", "relative": "Config.exe", "args": "-x",
+                          "use_launch_options": False},
+             ("run_game_exe", ("RJ1", "Config.exe", "-x", False))),
+            # チェックを外したときだけ、起動オプションを使わない
+            ("/api/patch/run",
+             {"work_id": "RJ1", "relative": "a.exe", "target_id": "RJ1",
+              "use_launch_options": False},
+             ("run_patch", ("RJ1", "a.exe", "RJ1", "work", "", "", False))),
         ]
         for path, payload, expected in cases:
             with self.subTest(path=path):

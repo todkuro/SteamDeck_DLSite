@@ -234,6 +234,17 @@ class DropEscapingLinksTest(unittest.TestCase):
         archive.drop_escaping_links(self.root)
         self.assertFalse(path.is_symlink())
 
+    def test_absolute_link_inside_is_removed(self):
+        """絶対パスのリンクは、中を指していても取り除く。
+
+        新しい 7-Zip は ``/etc/passwd`` を作業用ディレクトリの中を指すように書き換えて
+        作る。中身を移したあとは行き先を失うので、残しても壊れたリンクになるだけ。
+        """
+        path = self._link("game/lib/abs.so", self.root / "game" / "lib" / "libfoo.so.1")
+        self.assertEqual(archive.drop_escaping_links(self.root), ["game/lib/abs.so"])
+        self.assertFalse(path.is_symlink())
+        self.assertTrue((self.root / "game" / "lib" / "libfoo.so.1").exists(), "リンク先まで消した")
+
     def test_inside_links_are_kept(self):
         """Linux 版のゲームにある、中を指すリンクは残す。"""
         path = self._link("game/lib/libfoo.so", "libfoo.so.1")

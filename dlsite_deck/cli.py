@@ -868,7 +868,8 @@ def _fill_missing_image_urls(
     entries: list[state.InstalledWork],
 ) -> None:
     """画像 URL が記録されていない古い記録を、ライブラリから補う。"""
-    missing = [entry for entry in entries if not entry.image_url]
+    # 自由登録の作品は DLsite に無いので、問い合わせても見つからない
+    missing = [entry for entry in entries if not entry.image_url and not entry.is_local]
     if not missing:
         return
 

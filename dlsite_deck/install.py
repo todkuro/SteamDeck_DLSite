@@ -194,8 +194,12 @@ def register_to_steam(
     image: bytes | None,
     launch_options: str | None = None,
     keep_launch_options: bool = False,
+    compat_tool: str | None = None,
 ) -> steam.RegistrationResult:
     """設定どおりの画像を添えて Steam に登録する。
+
+    ``compat_tool`` を渡すと、設定の既定値の代わりにその Proton を割り当てる
+    (自由登録で、ゲームごとに選んだもの)。
 
     設定から何を作って何を渡すかの組み立ては、コマンドラインにも Web UI にも同じものが要る。
     ここに置いていないと、項目が増えるたびに 3 か所を直して回ることになる
@@ -210,7 +214,7 @@ def register_to_steam(
         image=image,
         image_slots=cfg.steam_grid_slots,
         logo=logo,
-        compat_tool=cfg.steam_compat_tool,
+        compat_tool=cfg.steam_compat_tool if compat_tool is None else compat_tool,
         cover_image=cover_image,
         keep_launch_options=keep_launch_options,
     )

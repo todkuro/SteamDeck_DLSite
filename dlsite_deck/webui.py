@@ -12,14 +12,16 @@ HTTP の受け答えと、他のサイトやプログラムからの要求を締
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import sys
 import threading
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from . import (
     __version__,
@@ -33,6 +35,7 @@ from . import (
     state,
     install,
     link,
+    local,
     proton,
     steam,
 )
@@ -54,6 +57,14 @@ CONFIG_FIELDS = [
              " 追加できるのは承認済みの場所だけ"},
     {"key": "install_dir", "label": "既定のインストール先", "type": "install_default",
      "help": "上の一覧から選ぶ。ダウンロード画面で最初に選択された状態になる"},
+    {"key": "runtime_dirs", "label": "共通パッチ置き場", "type": "list",
+     "help": "1 行に 1 つ。ランタイムやコーデックのインストーラを置く場所。ここにある exe と"
+             " msi は、どのゲームにも「パッチ」から実行できる。隠しディレクトリ（. で始まる"
+             "もの）とその中は指定できない"},
+    {"key": "import_dirs", "label": "自由登録の取り込み元", "type": "list",
+     "help": "1 行に 1 つ。自由登録で取り込むアーカイブやディレクトリを置く場所。画面では"
+             "この中だけをたどって選ぶ。取り込んだあとのアーカイブは、画面から削除できる。"
+             "隠しディレクトリ（. で始まるもの）とその中は指定できない"},
     {"key": "state_file", "label": "状態ファイル", "type": "path", "locked": True,
      "help": "導入済みの記録"},
     {"key": "cookie_source", "label": "Cookie の取得元", "type": "choice",
@@ -128,8 +139,10 @@ CONFIG_FIELDS = [
 #: 起動オプションも同じで、任意のコマンドを Steam に登録できる。
 #: ``acknowledged_paths`` は画面に出していないが、同じ理由で受け付けない。
 #:
-#: ``install_dirs`` だけは画面から変えられるが、承認済みの場所に限る
-#: (:meth:`Backend._check_install_dirs`)。
+#: ``install_dirs`` は画面から変えられるが、承認済みの場所に限る
+#: (:meth:`Backend._check_install_dirs`)。``import_dirs`` と ``runtime_dirs`` は、
+#: 利用者が自分で置き場所を決めて使うものなので画面から変えられる。ただし隠し
+#: ディレクトリなど、他のアプリの持ち物がある場所は断る (:func:`_check_user_dir`)。
 LOCKED_CONFIG_KEYS = frozenset(
     [field_def["key"] for field_def in CONFIG_FIELDS if field_def.get("locked")]
     + ["acknowledged_paths"]
@@ -211,14 +224,14 @@ def _new_cover_task() -> dict[str, Any]:
 
 @dataclass
 class Job:
-    """ダウンロードのような時間のかかる処理 1 件。"""
+    """ダウンロードや自由登録の取り込みのような、時間のかかる処理 1 件。"""
 
     id: int
     work_id: str
     title: str
     #: "queued" | "running" | "done" | "error" | "cancelled"
     status: str = "queued"
-    #: "download" | "extract"。展開中は途中で止められない。
+    #: "download" | "extract" | "copy"。ダウンロード中しか途中で止められない。
     phase: str = "download"
     message: str = ""
     #: 現在処理しているファイル名
@@ -239,14 +252,17 @@ class Job:
     created_output: Path | None = None
     #: 順番待ちの位置 (1 が次)。表示のために外から入れる。
     queue_position: int | None = None
+    #: 自由登録の取り込みで作る展開先。同じ場所への取り込みを二重に積まないために持つ。
+    output: Path | None = None
 
     @property
     def cancellable(self) -> bool:
         """今この瞬間、中止を受け付けられるか。
 
         順番待ちのものは何も始めていないので、いつでも取り消せる。
-        走っている分は、展開が外部コマンドに委ねられていて途中で安全に
-        止められないため、ダウンロード中だけ受け付ける。
+        走っている分は、ダウンロード中だけ受け付ける。展開は外部コマンドに
+        委ねられていて、自由登録のコピーも作業用ディレクトリから名前を変えるまでが
+        ひと続きなので、途中で安全に止められない。
         """
         if self.status == "queued":
             return True
@@ -292,8 +308,8 @@ class Backend:
         self._unavailable: list[str] = []
         self._library_fetched_at = 0.0
         self._jobs: dict[int, Job] = {}
-        #: 順番待ちの引数。走り出すまで持っておく。
-        self._queued_args: dict[int, tuple[api.Work, Path]] = {}
+        #: 順番待ちの処理。走り出すまで持っておく。
+        self._queued_args: dict[int, Callable[[Job], None]] = {}
         #: 順番待ちを処理する担当。同時に 1 本だけ。
         self._worker: threading.Thread | None = None
         #: 担当が動いているか。起動の判断は必ず _lock の中で行う。
@@ -824,6 +840,9 @@ class Backend:
             )
 
         values = self._check_install_dirs(dict(values))
+        for key in USER_DIR_KEYS:
+            if key in values and values[key] != current[key]:
+                values[key] = _check_user_dirs(key, values[key])
 
         merged = current
         merged.update(values)
@@ -880,19 +899,26 @@ class Backend:
         まだ登録されていなければ ``None``。空の起動オプションで登録済みの
         場合 (``""``) と区別するため。
         """
+        return self._launch_options_by_name().get(entry.steam_title or entry.title)
+
+    def _launch_options_by_name(self) -> dict[str, str]:
+        """登録済みのショートカットの起動オプションを、登録名ごとに集める。
+
+        同じ名前が複数あれば最初のものを使う。Steam が見つからなければ空。
+        """
         userdata = config_module.steam_userdata_path(self.config)
         if userdata is None:
-            return None
+            return {}
 
-        name = entry.steam_title or entry.title
+        found: dict[str, str] = {}
         for config_dir in steam.find_user_config_dirs(userdata):
             document = steam.load_shortcuts(config_dir / "shortcuts.vdf")
             for existing in document.get("shortcuts", {}).values():
                 if not isinstance(existing, dict):
                     continue
-                if steam.get_field(existing, "AppName") == name:
-                    return str(steam.get_field(existing, "LaunchOptions") or "")
-        return None
+                name = str(steam.get_field(existing, "AppName") or "")
+                found.setdefault(name, str(steam.get_field(existing, "LaunchOptions") or ""))
+        return found
 
     def _launch_options_for(self, entry: state.InstalledWork) -> tuple[str, str]:
         """登録するときに付く起動オプションと、その出どころ。
@@ -917,6 +943,8 @@ class Backend:
             "directory": str(entry.path),
             "title": entry.title,
             "steam_title": entry.steam_title or entry.title,
+            # 「実行」の画面で、どの Proton 環境で動くかを見せるために使う
+            "app_id": entry.steam_app_id,
             "selected": entry.executable,
             # 表示するだけ。登録のときに画面から送っても使わない。
             "launch_options": launch_options,
@@ -1123,9 +1151,7 @@ class Backend:
             self._cover_task["total"] = len(targets)
 
         config_dirs = steam.find_user_config_dirs(userdata)
-        slots = list(self.config.steam_grid_slots)
-        # 設定から外したスロットは、置いてあるものを削除する
-        unused = [slot for slot in steam.GRID_SLOTS if slot != steam.LOGO_SLOT and slot not in slots]
+        slots, unused = self._grid_slot_plan()
 
         for entry in targets:
             written, removed, note = 0, 0, ""
@@ -1159,6 +1185,18 @@ class Backend:
                 f"{task['removed']} 枚を引き上げました。"
                 " Steam を起動し直すと表示に反映されます。"
             )
+
+    def _grid_slot_plan(self) -> tuple[list[str], list[str]]:
+        """画像を置くスロットと、置いてあれば削除するスロット (設定から外したもの)。
+
+        ロゴは別の設定 (steam_logo_source) で決めるので、どちらにも入れない。
+        """
+        slots = list(self.config.steam_grid_slots)
+        unused = [
+            slot for slot in steam.GRID_SLOTS
+            if slot != steam.LOGO_SLOT and slot not in slots
+        ]
+        return slots, unused
 
     def _rebuild_one(
         self,
@@ -1278,6 +1316,8 @@ class Backend:
         return {
             "work_id": work_id,
             "title": entry.title,
+            # 自由登録の作品は DLsite から取り直せない。確認の文言を変えるために返す。
+            "origin": entry.origin,
             "directory": str(entry.path),
             "size_label": download.format_size(_directory_size(entry.path)),
             "cache_label": download.format_size(_directory_size(cache)),
@@ -1686,88 +1726,223 @@ class Backend:
     # -- パッチ (exe を実行して当てるもの) ------------------------------
 
     def patches(self, work_id: str) -> dict[str, Any]:
-        """パッチとして実行できる exe を並べる。
+        """パッチとして実行できるものを並べる。
 
-        1 つの作品に 12 個の exe が入っていて、
-        ディレクトリで区別する作りがある。相対パスをそのまま見せる。
+        出どころは 2 つ。**この作品の中**の exe (1 つの作品に 12 個入っていて、
+        ディレクトリで区別する作りがある) と、**共通パッチ置き場**に置いた
+        ランタイムやコーデックのインストーラ。どちらも相対パスをそのまま見せる。
+
+        「実行済み」は当てた先のゲームごとに記録しているので、当てる先ごとに
+        実行済みの鍵を返し、画面で選び直したときに印を付け直す。
         """
         current = self.state()
         entry = self._require_installed(work_id, current)
 
-        found = proton.find_patches(entry.path, applied=entry.applied_patches)
+        # 当てる先のゲームの起動オプション。画面で見せ、既定ではパッチにも付ける。
+        try:
+            launch = self._launch_options_by_name()
+        except steam.SteamError:
+            launch = {}
+
         targets = [
             {"id": other.id, "title": other.title,
+             "launch_options": launch.get(other.steam_title or other.title),
              "same_maker": bool(entry.maker and other.maker == entry.maker),
-             "registered": other.steam_app_id is not None}
+             # 両方に出品者があって違うときだけ。自由登録の作品には出品者が無い。
+             "other_maker": bool(entry.maker and other.maker and other.maker != entry.maker),
+             "registered": other.steam_app_id is not None,
+             "installed": other.installed_patches}
             for other in current.works.values()
             if other.path.is_dir()
         ]
         # 同じ出品者を先に出す。当てる先はまず同じサークルの本編なので、
         # タイトル順のまま出すと関係ない作品が初期選択になってしまう。
         targets.sort(key=lambda item: (not item["same_maker"], item["title"]))
+
+        runtimes = []
+        for index, root in enumerate(self.config.runtime_paths):
+            found = proton.find_patches(root, keep_runtimes=True) if root.is_dir() else []
+            runtimes.append({
+                "index": index,
+                "path": str(root),
+                "exists": root.is_dir(),
+                "patches": [
+                    {"relative": item.relative,
+                     "size_label": download.format_size(item.size),
+                     "key": _runtime_key(item.path)}
+                    for item in found
+                ],
+            })
+
         return {
             "work_id": work_id,
             "title": entry.title,
             "directory": str(entry.path),
             "patches": [
                 {"relative": item.relative, "size_label": download.format_size(item.size),
-                 "applied": item.applied}
-                for item in found
+                 "key": _work_patch_key(work_id, item.relative)}
+                for item in proton.find_patches(entry.path)
             ],
+            "runtimes": runtimes,
             "targets": targets,
         }
 
-    def run_patch(self, work_id: str, relative: str, target_id: str) -> dict[str, Any]:
-        """パッチの exe を、当てる先のゲームのプレフィックスで実行する。
+    def run_patch(
+        self,
+        work_id: str,
+        relative: str,
+        target_id: str,
+        source: str = "work",
+        root: str = "",
+        args: str = "",
+        use_launch_options: bool = True,
+    ) -> dict[str, Any]:
+        """パッチの exe (か msi) を、当てる先のゲームのプレフィックスで実行する。
 
         当てる先を別に指定できるのは、パッチが本編とは別の作品として売られて
         いることがあるため (特典セットとして別売りされる形がある)。
+
+        ``source`` が ``"runtime"`` なら、共通パッチ置き場の ``root`` 番目の中から選ぶ。
+        ``args`` はインストーラに渡す引数 (``/quiet`` など)。シェルは通さず、
+        空白で区切って (引用符でまとめられる) そのまま渡す。
+
+        ``use_launch_options`` が立っていれば (既定)、当てる先のゲームに Steam で
+        設定してある起動オプションを付けて実行する。ゲームと同じ言語設定で動くので、
+        日本語のインストーラが文字化けしない。``%command%`` の無い起動オプションは
+        使わない (Steam ではゲームへの引数になる形で、パッチに付けると意味が変わる)。
         """
         current = self.state()
-        source = current.get(work_id)
         target = current.get(target_id)
-        if source is None or not source.path.is_dir():
-            raise UiError(f"{work_id} はまだ展開されていません。")
         if target is None or not target.path.is_dir():
             raise UiError(f"当てる先 {target_id} が導入されていません。")
+        self._require_prefix(target)
+        arguments = _split_args(args)
+
+        if source == "runtime":
+            try:
+                _base, exe = local.resolve_in(
+                    self.config.runtime_paths, root, relative, "共通パッチ置き場"
+                )
+            except local.LocalError as error:
+                raise UiError(str(error)) from error
+            key = _runtime_key(exe)
+        elif source == "work":
+            owner = current.get(work_id)
+            if owner is None or not owner.path.is_dir():
+                raise UiError(f"{work_id} はまだ展開されていません。")
+            try:
+                exe = link.resolve_inside(owner, relative)
+            except link.LinkError as error:
+                raise UiError(str(error)) from error
+            key = _work_patch_key(work_id, relative)
+        else:
+            raise UiError("実行するものの出どころが正しくありません。")
+
+        # パッチは当てる先のゲームのディレクトリで動かす (そこへ書き込むものが多い)
+        response, result = self._run_in_prefix(
+            target, exe, relative, arguments, use_launch_options, working_dir=target.path
+        )
+        if result.ok and key not in target.installed_patches:
+            target.installed_patches.append(key)
+            current.save()
+        response["key"] = key
+        return response
+
+    def run_game_exe(
+        self,
+        work_id: str,
+        relative: str,
+        args: str = "",
+        use_launch_options: bool = True,
+    ) -> dict[str, Any]:
+        """ゲームの中の exe を、そのゲームの Proton 環境 (同じ AppID) で実行する。
+
+        設定用のアプリ (``Config.exe`` など) がゲーム本体と別になっていることが多い。
+        Steam には本体しか登録しないので、それ以外はここから動かす。パッチと違い、
+        何度でも起動するものなので「実行済み」は記録しない。
+        """
+        entry = self._require_installed(work_id)
+        self._require_prefix(entry)
+        arguments = _split_args(args)
+        try:
+            exe = link.resolve_inside(entry, relative)
+        except link.LinkError as error:
+            raise UiError(str(error)) from error
+        # Steam がゲームを起動するときと同じく、exe のあるディレクトリで動かす。
+        # 設定用のアプリは、隣にある設定ファイルを相対パスで読むことが多い。
+        response, _result = self._run_in_prefix(
+            entry, exe, relative, arguments, use_launch_options, working_dir=exe.parent
+        )
+        return response
+
+    @staticmethod
+    def _require_prefix(target: state.InstalledWork) -> None:
+        """Proton の環境 (プレフィックス) を持てるか。Steam の登録 (AppID) に結び付く。"""
         if target.steam_app_id is None:
             raise UiError(
                 f"{target.title} はまだ Steam に登録されていません。"
                 " プレフィックスは登録して一度起動すると作られます。"
             )
 
-        userdata = self._userdata()
+    def _run_in_prefix(
+        self,
+        target: state.InstalledWork,
+        exe: Path,
+        relative: str,
+        arguments: list[str],
+        use_launch_options: bool,
+        working_dir: Path,
+    ) -> "tuple[dict[str, Any], proton.RunResult]":
+        """``target`` の Proton 環境で ``exe`` を実行し、画面に返す内容と結果を返す。
 
-        try:
-            exe = link.resolve_inside(source, relative)
-        except link.LinkError as error:
-            raise UiError(str(error)) from error
+        パッチの実行と、ゲームの中の exe の実行で共通。``use_launch_options`` が
+        立っていれば、``target`` に Steam で設定してある起動オプションを付ける
+        (``%command%`` の無いものは付けない)。
+        """
         if not exe.is_file():
             raise UiError(f"実行ファイルが見つかりません: {relative}")
+        if not exe.name.lower().endswith(proton.PATCH_SUFFIXES):
+            raise UiError("実行できるのは exe か msi だけです。")
+
+        userdata = self._userdata()
+
+        launch_options, launch_note = "", ""
+        if use_launch_options:
+            try:
+                configured = (self._current_launch_options(target) or "").strip()
+            except steam.SteamError:
+                configured = ""
+            if configured and proton.COMMAND_MARK in configured:
+                launch_options = configured
+            elif configured:
+                launch_note = (
+                    f"起動オプションに {proton.COMMAND_MARK} が無いため、"
+                    "起動オプションは使いませんでした。"
+                )
 
         try:
             result = proton.run_exe(
                 userdata,
                 target.steam_app_id,
                 exe,
-                working_dir=target.path,
+                working_dir=working_dir,
+                args=arguments,
                 fallback_tool=self.config.steam_compat_tool,
+                launch_options=launch_options,
             )
         except proton.ProtonError as error:
             raise UiError(str(error)) from error
 
-        if result.ok and relative not in source.applied_patches:
-            source.applied_patches.append(relative)
-            current.save()
-
         return {
-            "message": result.summary(),
+            "message": result.summary() + (" " + launch_note if launch_note else ""),
             "ok": result.ok,
+            # 実際に付けた起動オプション。付けなかったなら空。
+            "launch_options": result.launch_options,
             "returncode": result.returncode,
             "proton": result.proton,
             "prefix": result.prefix,
             "output": (result.stdout + result.stderr)[-3000:],
-        }
+        }, result
 
     # -- Steam --------------------------------------------------------
 
@@ -1835,6 +2010,8 @@ class Backend:
         result = install.register_to_steam(
             self.config, userdata, title, target, image,
             launch_options=options.strip(), keep_launch_options=True,
+            # 自由登録で選んだ Proton。無ければ設定の既定値。
+            compat_tool=entry.compat_tool,
         )
 
         entry.executable = str(target)
@@ -1865,6 +2042,10 @@ class Backend:
         saved = cover.cached_image(entry.path)
         if saved is not None:
             return saved
+
+        # 自由登録の作品は DLsite に無い。画像は利用者が選んだものだけを使う。
+        if entry.is_local:
+            return None
 
         url = entry.image_url
         if not url:
@@ -1907,6 +2088,318 @@ class Backend:
             "images": [str(path) for path in result.images],
         }
 
+    # -- 自由登録 -------------------------------------------------------
+
+    def local_json(self) -> dict[str, Any]:
+        """自由登録の一覧と、新規登録の画面を組み立てるための情報。
+
+        DLsite には問い合わせない。ログインしていなくても使えるようにするため。
+        """
+        current = self.state()
+        shortcuts = self.registered_shortcuts()
+        roots = self._import_roots()
+
+        items = []
+        for entry in current.works.values():
+            if not entry.is_local:
+                continue
+            installed = entry.path.is_dir()
+            parts = (
+                local.archive_parts(Path(entry.source))
+                if entry.source and entry.source_kind == "archive"
+                else []
+            )
+            items.append({
+                "id": entry.id,
+                "title": entry.title,
+                "directory": entry.directory,
+                "installed": installed,
+                "status_label": "導入済み" if installed else "記録のみ",
+                "steam_registered": _is_registered(entry, shortcuts),
+                "steam_foreign": _is_foreign(entry, shortcuts),
+                "steam_title": entry.steam_title or entry.title,
+                "steam_app_id": entry.steam_app_id,
+                "installed_at": (
+                    api.format_datetime(entry.installed_at) if entry.installed_at else ""
+                ),
+                "installed_sort": entry.installed_at or "",
+                "source": entry.source or "",
+                "source_kind": entry.source_kind or "",
+                # アーカイブが取り込み元に残っているか。残っていれば画面から削除できる。
+                "archive_exists": bool(parts),
+                "archive_label": download.format_size(
+                    sum(part.stat().st_size for part in parts)
+                ),
+                "archive_deletable": bool(parts) and all(
+                    _inside_any(part, roots) for part in parts
+                ),
+                "compat_tool": entry.compat_tool,
+                "has_image": installed and cover.has_cached_image(entry.path),
+            })
+
+        items.sort(key=lambda item: item["title"].strip())
+        return {
+            "items": items,
+            "roots": local.roots_json(self.config),
+            "install_dirs": self.config.install_dirs,
+            "install_dir": self.config.install_dir,
+            "compat_tools": self._compat_tools(),
+            "default_tool": self.config.steam_compat_tool,
+            "steam": self.steam_status(),
+        }
+
+    def _import_roots(self) -> list[Path]:
+        """実在する取り込み元。リンクを解いた形。"""
+        return [root.resolve() for root in self.config.import_paths if root.is_dir()]
+
+    def local_browse(self, root: str, relative: str, mode: str) -> dict[str, Any]:
+        """取り込み元の中を見る。取り込むものや、表紙の画像を選ぶのに使う。"""
+        if mode not in ("source", "image"):
+            raise UiError("見る目的の指定が正しくありません。")
+        try:
+            return local.browse(self.config, root, relative, mode)
+        except local.LocalError as error:
+            raise UiError(str(error)) from error
+
+    def local_names(self, title: str) -> dict[str, Any]:
+        """ゲーム名から作るディレクトリ名の候補。ラジオボタンの横に見せる。"""
+        title = title.strip()
+        if not title:
+            return {"title": "", "romaji": ""}
+        return {
+            "title": local.title_directory_name(title),
+            "romaji": local.romaji_directory_name(title, self.config),
+        }
+
+    def _check_compat_tool(self, tool: str) -> str:
+        """選ばれた Proton が使えるものか確かめる。空は「割り当てない」。"""
+        tool = tool.strip()
+        if not tool:
+            return ""
+        allowed = {item["value"] for item in self._compat_tools()}
+        if tool not in allowed:
+            raise UiError(f"'{tool}' は使える互換ツールの一覧にありません。")
+        return tool
+
+    def start_local_import(self, values: dict[str, Any]) -> dict[str, Any]:
+        """自由登録の取り込みを順番待ちに積む。
+
+        コピーや展開には時間がかかるので、ダウンロードと同じ担当スレッドで 1 本ずつ行う。
+        """
+        title = str(values.get("title") or "").strip()
+        if not title:
+            raise UiError("ゲーム名を入力してください。")
+
+        try:
+            name = local.directory_name(
+                str(values.get("name_mode") or ""), title,
+                str(values.get("name") or ""), self.config,
+            )
+            base, source = local.resolve(
+                self.config, values.get("root"), str(values.get("path") or "")
+            )
+        except local.LocalError as error:
+            raise UiError(str(error)) from error
+
+        if source == base:
+            # 取り込み元の中身すべて (他のゲームのアーカイブも) をコピーすることになる
+            raise UiError("取り込み元そのものは取り込めません。その中のディレクトリを選んでください。")
+        if source.is_dir():
+            kind = "directory"
+        elif source.is_file() and local.is_archive(source):
+            kind = "archive"
+            problem = local.first_part_problem(source)
+            if problem:
+                raise UiError(problem)
+        else:
+            raise UiError("取り込むアーカイブかディレクトリを選んでください。")
+
+        try:
+            target_root = self.config.resolve_install_dir(values.get("install_dir") or None)
+        except ValueError as error:
+            raise UiError(str(error)) from None
+
+        compat_tool = self._check_compat_tool(str(values.get("compat_tool") or ""))
+
+        output = target_root / name
+        if output.exists():
+            raise UiError(f"{output} は既にあります。別のディレクトリ名にしてください。")
+        # 取り込むディレクトリの中へコピーすると、コピーしたものをまたコピーし続ける
+        if kind == "directory" and is_within(output.resolve(), source):
+            raise UiError("取り込むディレクトリの中には展開できません。")
+
+        with self._lock:
+            pending = [
+                job for job in self._jobs.values() if job.status in ("running", "queued")
+            ]
+            if any(job.output == output for job in pending):
+                raise UiError(f"{output} へは、すでに取り込みを待っています。")
+            work_id = self.state().next_local_id(job.work_id for job in pending)
+
+            job = Job(
+                id=self._next_job_id, work_id=work_id, title=title,
+                phase="copy", output=output,
+            )
+            spec = {
+                "work_id": work_id, "title": title, "source": source, "kind": kind,
+                "output": output, "compat_tool": compat_tool,
+            }
+            self._jobs[job.id] = job
+            self._queued_args[job.id] = lambda job: self._run_local_import(job, spec)
+            self._next_job_id += 1
+
+        self._ensure_worker()
+        return {"job": job.to_json(), "work_id": work_id}
+
+    def _run_local_import(self, job: Job, spec: dict[str, Any]) -> None:
+        """取り込みを実行する。失敗したら、この回で作ったものだけを片付ける。"""
+        source: Path = spec["source"]
+        output: Path = spec["output"]
+        created = False
+        try:
+            if output.exists():
+                raise UiError(f"{output} は既にあります。別のディレクトリ名にしてください。")
+
+            if spec["kind"] == "directory":
+                job.phase = "copy"
+                job.current = "コピー中"
+                job.total = local.directory_size(source)
+                download.ensure_space(output.parent, job.total)
+
+                def progress(copied: int) -> None:
+                    job.written = copied
+
+                created = True
+                removed = local.copy_directory(source, output, progress=progress)
+            else:
+                job.phase = "extract"
+                job.current = "展開中"
+                parts = local.archive_parts(source)
+                # 展開後の大きさは分からないので、ダウンロードと同じく倍を見ておく
+                download.ensure_space(
+                    output.parent, 2 * sum(part.stat().st_size for part in parts)
+                )
+                created = True
+                removed = local.extract_archive(source, output, self.config).removed_links
+
+            executables = archive.find_executables(output)
+            entry = state.InstalledWork(
+                id=spec["work_id"],
+                title=spec["title"],
+                directory=str(output),
+                installed_at=datetime.now(timezone.utc).isoformat(),
+                work_type="game",
+                executable=str(executables[0]) if executables else None,
+                origin=state.ORIGIN_LOCAL,
+                source=str(source),
+                source_kind=spec["kind"],
+                compat_tool=spec["compat_tool"],
+            )
+            current = self.state()
+            current.works[entry.id] = entry
+            current.save()
+
+            job.current = ""
+            job.status = "done"
+            job.message = f"取り込みました: {output}"
+            if removed:
+                job.message += (
+                    f"（外を指すリンクと絶対パスのリンク {len(removed)} 個を取り除きました）"
+                )
+        except Exception as error:  # 画面に出すので、例外を受け止めて記録する
+            job.status = "error"
+            job.current = ""
+            job.message = str(error) or error.__class__.__name__
+            if created and output.is_dir():
+                shutil.rmtree(output, ignore_errors=True)
+            traceback.print_exc()
+        finally:
+            job.finished_at = time.time()
+
+    def _require_local(
+        self, work_id: str, current: "state.State | None" = None
+    ) -> state.InstalledWork:
+        """自由登録の作品の記録を引く。DLsite の作品なら断る。"""
+        entry = self._require_entry(work_id, current)
+        if not entry.is_local:
+            raise UiError(f"{entry.title} は自由登録の作品ではありません。")
+        return entry
+
+    def delete_local_archive(self, work_id: str) -> dict[str, Any]:
+        """取り込んだあとのアーカイブを、取り込み元から削除する。
+
+        分割されたものは続きのファイルもまとめて消す。消すのは**取り込み元の中にある
+        もの**だけ。設定を書き換えて取り込み元から外した場所のものは消さない。
+        """
+        entry = self._require_local(work_id)
+        if entry.source_kind != "archive" or not entry.source:
+            raise UiError(f"{entry.title} はアーカイブから取り込んだものではありません。")
+
+        parts = local.archive_parts(Path(entry.source))
+        if not parts:
+            raise UiError(f"アーカイブは既にありません: {entry.source}")
+
+        roots = self._import_roots()
+        outside = [str(part) for part in parts if not _inside_any(part, roots)]
+        if outside:
+            raise UiError("取り込み元の外にあるため削除しません: " + ", ".join(outside))
+
+        freed = 0
+        for part in parts:
+            size = part.stat().st_size
+            part.unlink()
+            freed += size
+
+        return {
+            "message": (
+                f"{entry.title} のアーカイブ {len(parts)} 個"
+                f"（{download.format_size(freed)}）を削除しました。"
+            ),
+            "freed": freed,
+            "removed": [str(part) for part in parts],
+        }
+
+    def set_local_image(self, work_id: str, root: str, relative: str) -> dict[str, Any]:
+        """自由登録の作品に、表紙・背景に使う画像を設定する。
+
+        選んだ画像は作品ディレクトリに写しておく (DLsite の作品の画像と同じ置き場)。
+        Steam に登録済みなら、ライブラリの画像もその場で作り直す。
+        """
+        current = self.state()
+        entry = self._require_local(work_id, current)
+        if not entry.path.is_dir():
+            raise UiError(f"{entry.title} のディレクトリが見つかりません: {entry.path}")
+
+        try:
+            _base, picked = local.resolve(self.config, root, relative)
+        except local.LocalError as error:
+            raise UiError(str(error)) from error
+        if not picked.is_file() or not local.is_image(picked):
+            raise UiError("PNG か JPEG の画像を選んでください。")
+        if picked.stat().st_size > local.IMAGE_LIMIT:
+            raise UiError("画像が大きすぎます（20 MiB まで）。")
+
+        image = picked.read_bytes()
+        if not cover.is_supported_image(image):
+            raise UiError("PNG か JPEG の画像ではありません。")
+        if cover.store_image(entry.path, image) is None:
+            raise UiError(f"画像を保存できませんでした: {entry.path}")
+
+        message = f"{entry.title} の画像を設定しました。"
+        if entry.steam_app_id is None:
+            return {"message": message + " Steam に登録すると、ライブラリの表紙・背景に使われます。"}
+
+        userdata = config_module.steam_userdata_path(self.config)
+        if (
+            userdata is not None
+            and self.config.steam_grid_images
+            and not _is_foreign(entry, self.registered_shortcuts())
+        ):
+            slots, unused = self._grid_slot_plan()
+            self._rebuild_one(entry, steam.find_user_config_dirs(userdata), slots, unused)
+            message += " Steam を起動し直すと、ライブラリの表示に反映されます。"
+        return {"message": message}
+
     # -- ダウンロード -------------------------------------------------
 
     def jobs_json(self) -> dict[str, Any]:
@@ -1948,7 +2441,7 @@ class Backend:
         self._worker = threading.Thread(target=self._work_queue, daemon=True)
         self._worker.start()
 
-    def _next_job(self) -> "tuple[Job, api.Work, Path] | None":
+    def _next_job(self) -> "tuple[Job, Callable[[Job], None]] | None":
         """次に処理するものを取り出す。無ければ担当を終わらせる。"""
         with self._lock:
             waiting = sorted(
@@ -1965,8 +2458,7 @@ class Backend:
                     continue
                 job.status = "running"
                 job.started_at = time.time()
-                work, target_root = self._queued_args[job.id]
-                return job, work, target_root
+                return job, self._queued_args[job.id]
 
             # 仕事が無いことの確認と、担当を降りる判断を同じロックの中で行う
             self._worker_active = False
@@ -1978,9 +2470,9 @@ class Backend:
             picked = self._next_job()
             if picked is None:
                 return
-            job, work, target_root = picked
+            job, run = picked
             try:
-                self._run_download(job, work, target_root)
+                run(job)
             finally:
                 with self._lock:
                     self._queued_args.pop(job.id, None)
@@ -2004,7 +2496,9 @@ class Backend:
 
             job = Job(id=self._next_job_id, work_id=work.id, title=work.title)
             self._jobs[job.id] = job
-            self._queued_args[job.id] = (work, target_root)
+            self._queued_args[job.id] = (
+                lambda job: self._run_download(job, work, target_root)
+            )
             self._next_job_id += 1
 
         # 実際に走らせるのは担当スレッド。ここでは順番に積むだけ。
@@ -2032,7 +2526,7 @@ class Backend:
         if job.status != "running":
             raise UiError("そのジョブは既に終わっています。")
         if not job.cancellable:
-            raise UiError("展開中は中止できません。終わるまでお待ちください。")
+            raise UiError("展開やコピーの途中は中止できません。終わるまでお待ちください。")
 
         job.cancel_requested = True
         job.current = "中止しています"
@@ -2188,6 +2682,106 @@ def _default_rank(item: dict[str, Any]) -> int:
     if item["status_label"] == "記録のみ":
         return _DEFAULT_RANK["record_only"]
     return _DEFAULT_RANK["missing"]
+
+
+#: 画面から自由に変えられる「置き場」の設定と、その呼び名
+USER_DIR_KEYS = {"import_dirs": "自由登録の取り込み元", "runtime_dirs": "共通パッチ置き場"}
+
+
+def _check_user_dirs(key: str, values: Any) -> list[str]:
+    """画面から届いた置き場の一覧を確かめる。1 つでもおかしければ断る。"""
+    if not isinstance(values, list):
+        raise UiError(f"{USER_DIR_KEYS[key]}は一覧で指定してください。")
+    cleaned: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in cleaned:
+            _check_user_dir(USER_DIR_KEYS[key], text)
+            cleaned.append(text)
+    return cleaned
+
+
+def _check_user_dir(label: str, text: str) -> None:
+    """取り込み元・共通パッチ置き場にしてよい場所か。
+
+    どちらも利用者が決める場所なので画面から変えられるが、合言葉を知った
+    プログラムに悪用されないよう、他のアプリの持ち物がある場所は断る。
+
+    * 取り込み元に ``~/.mozilla`` を指定されると、Cookie のファイルを「ゲーム」
+      として取り込まれてしまう。
+    * 共通パッチ置き場に Flatpak のアプリが書ける ``~/.var/app/...`` を指定されると、
+      そのアプリが置いた exe をゲームの Proton で実行させられてしまう。
+
+    どちらも隠しディレクトリ (``.`` で始まる名前) の中にあるので、それを断る。
+    Windows では ``AppData`` が同じ役割の場所。リンクは解いてから判断する。
+    ``/`` やホームディレクトリそのもの (中に隠しディレクトリを含む) と、ツール自身の
+    プログラムの置き場も断る。
+    """
+    path = Path(os.path.expanduser(text))
+    if not path.is_absolute():
+        raise UiError(f"{label}は絶対パスで指定してください: {text}")
+    if not path.is_dir():
+        raise UiError(f"{label}に指定したディレクトリが見つかりません: {text}")
+
+    resolved = path.resolve()
+    hidden = [
+        part for part in resolved.parts
+        if part.startswith(".") or part.lower() == "appdata"
+    ]
+    if hidden:
+        raise UiError(
+            f"{label}に、隠しディレクトリ（{hidden[0]}）の中は指定できません: {text}"
+            "（他のアプリのデータが置かれる場所のため）"
+        )
+
+    project = config_module.PROJECT_ROOT.resolve()
+    forbidden = {Path(resolved.anchor), Path.home().resolve(), project, project / "dlsite_deck"}
+    if resolved in forbidden or is_within(resolved, project / "dlsite_deck"):
+        raise UiError(f"{label}には、その場所そのものは指定できません: {text}")
+
+
+#: パッチに渡す引数の長さの上限
+MAX_PATCH_ARGS = 1000
+
+
+def _split_args(text: str) -> list[str]:
+    """画面で入力された引数を分ける。シェルは通さない。"""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) > MAX_PATCH_ARGS:
+        raise UiError(f"引数が長すぎます（{MAX_PATCH_ARGS} 文字まで）。")
+    if any(ord(char) < 0x20 for char in text):
+        raise UiError("引数に改行や制御文字は使えません。")
+    try:
+        # Windows のパス (C:\...) の \ を消さないよう、posix=False で分ける
+        parts = shlex.split(text, posix=False)
+    except ValueError as error:
+        raise UiError(f"引数を読み取れません（引用符の対応を確認してください）: {error}") from None
+    # 引用符でまとめた部分は、囲みの引用符を外して渡す
+    return [
+        part[1:-1] if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'" else part
+        for part in parts
+    ]
+
+
+def _work_patch_key(work_id: str, relative: str) -> str:
+    """作品の中の exe を「どのゲームに当てたか」の記録に使う鍵。"""
+    return f"work:{work_id}:{relative}"
+
+
+def _runtime_key(path: Path) -> str:
+    """共通パッチ置き場の exe を記録に使う鍵。置き場の順番が変わっても同じになるよう、場所で持つ。"""
+    return f"runtime:{path.resolve()}"
+
+
+def _inside_any(path: Path, roots: list[Path]) -> bool:
+    """``path`` が、どれかの ``roots`` の中 (そのものは含まない) にあるか。リンクは解く。"""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return any(is_within(resolved, root, strict=True) for root in roots)
 
 
 def _is_under(path: Path, root: Path) -> bool:

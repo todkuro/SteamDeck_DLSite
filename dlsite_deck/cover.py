@@ -87,6 +87,21 @@ def cached_image(directory: Path | None) -> bytes | None:
     return None
 
 
+def has_cached_image(directory: Path | None) -> bool:
+    """作品ディレクトリにストア画像が残してあるか。中身は読まない。"""
+    if directory is None:
+        return False
+    return any(
+        (Path(directory) / (CACHE_STEM + extension)).is_file()
+        for extension in CACHE_EXTENSIONS
+    )
+
+
+def is_supported_image(image: bytes) -> bool:
+    """表紙に使える形式 (PNG か JPEG) か。"""
+    return _mime(image) is not None
+
+
 def store_image(directory: Path | None, image: bytes) -> Path | None:
     """ストア画像を作品ディレクトリに残す。失敗しても呼び出し側を止めない。"""
     if directory is None or not image:

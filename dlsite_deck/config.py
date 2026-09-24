@@ -113,6 +113,22 @@ class Config:
     #: 一度承認したものは再確認しない。端末の無い起動 (デスクトップの
     #: ショートカットや Steam の非 Steam ゲーム) では確認に答えられないため。
     acknowledged_paths: list[str] = field(default_factory=list)
+    #: 「自由登録」で取り込むアーカイブやディレクトリを置く場所。画面ではこの中だけを
+    #: たどって選ぶ。取り込んだあとは、画面からこの中のアーカイブを削除できる。
+    #:
+    #: 利用者が決める場所なので設定画面から変えられる。ただし Firefox の Cookie などが
+    #: ある隠しディレクトリは指定させない (webui._check_user_dir)。
+    import_dirs: list[str] = field(
+        default_factory=lambda: [str(PROJECT_ROOT / "imports")]
+    )
+    #: 共通パッチ置き場。外から持ってきたランタイム (VC++ や DirectX) やコーデックの
+    #: インストーラを置き、どのゲームにも「パッチ」として実行できるようにする。
+    #:
+    #: 取り込み元と同じく設定画面から変えられる。他のアプリが書き込める隠し
+    #: ディレクトリ (Flatpak の ~/.var/app など) は指定させない (webui._check_user_dir)。
+    runtime_dirs: list[str] = field(
+        default_factory=lambda: [str(PROJECT_ROOT / "runtimes")]
+    )
     #: 展開ツール (7z / unar / unrar など) と rsvg-convert を探す追加のディレクトリ。PATH より優先する。
     tool_dirs: list[str] = field(default_factory=list)
     #: 除外する作品 ID
@@ -165,6 +181,16 @@ class Config:
             f"設定にない展開先です: {requested}"
             "（設定画面でインストール先を追加してください）"
         )
+
+    @property
+    def import_paths(self) -> list[Path]:
+        """自由登録の取り込み元すべて。"""
+        return [Path(directory).expanduser() for directory in self.import_dirs if directory.strip()]
+
+    @property
+    def runtime_paths(self) -> list[Path]:
+        """共通パッチ置き場すべて。"""
+        return [Path(directory).expanduser() for directory in self.runtime_dirs if directory.strip()]
 
     @property
     def state_path(self) -> Path:
@@ -247,7 +273,10 @@ def acknowledge(config: Config, paths: list[Path]) -> None:
 
 
 def external_paths(config: Config) -> list[Path]:
-    """書き込み対象のうち、プロジェクトの外にあるものを列挙する。"""
+    """書き込み (削除を含む) の対象のうち、プロジェクトの外にあるものを列挙する。"""
+    # 自由登録の取り込み元は入れない。画面から変えられる場所なので、ここに入れると
+    # 画面で足したとたんに端末での承認が要り、端末の無い起動ではツールが起動しなくなる。
+    # 取り込み元の中で消すのは、取り込んだアーカイブだけ。
     candidates = [config.download_path, config.state_path, *config.install_paths]
     if config.register_to_steam:
         candidates.append(steam_userdata_path(config))

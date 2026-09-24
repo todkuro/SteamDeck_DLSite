@@ -149,6 +149,7 @@
   <h1>DLsite for SteamDeck</h1>
   <nav class="tabs">
     <button class="tab active" data-tab="library">ライブラリ</button>
+    <button class="tab" data-tab="local">自由登録</button>
     <button class="tab" data-tab="proton">Proton 設定</button>
     <button class="tab" data-tab="status">状態・ログイン</button>
     <button class="tab" data-tab="settings">設定</button>
@@ -212,6 +213,28 @@
     <p id="unavailable" class="muted"></p>
   </section>
 
+  <section id="view-local" hidden>
+    <div class="toolbar">
+      <button id="local-new" class="primary">新規登録</button>
+      <input id="local-search" type="search" placeholder="タイトル・IDで絞り込み" size="20">
+      <select id="local-sort">
+        <option value="title">タイトル</option>
+        <option value="installed">登録日</option>
+      </select>
+      <button id="local-order" title="昇順・降順を切り替える">昇順</button>
+      <button id="local-reload">再読み込み</button>
+    </div>
+    <p id="local-roots" class="muted"></p>
+    <table>
+      <thead><tr>
+        <th style="width:9em">ID</th><th style="width:6em">状態</th>
+        <th>タイトル</th><th style="width:9em">登録日</th><th style="width:14em">操作</th>
+      </tr></thead>
+      <tbody id="local-rows"></tbody>
+    </table>
+    <p id="local-empty" class="muted"></p>
+  </section>
+
   <section id="view-status" hidden>
     <div class="toolbar"><button id="status-reload">再確認</button></div>
     <div id="status-body"></div>
@@ -250,7 +273,7 @@
   <div class="dialog-body">
     <h2 style="margin-top:0;font-size:15px">Steam に登録</h2>
     <div class="field">
-      <span>ライブラリに登録する名称（DLsite のタイトルが初期値です。変更できます）</span>
+      <span>ライブラリに登録する名称（作品のタイトルが初期値です。変更できます）</span>
       <input id="steam-title" type="text">
     </div>
     <div class="field">
@@ -325,16 +348,111 @@
   </div>
 </dialog>
 
+<dialog id="local-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">自由登録</h2>
+    <p class="muted">DLsite 以外のゲームを、アーカイブかディレクトリから取り込みます。</p>
+    <div class="field">
+      <span>ゲーム名</span>
+      <input id="local-title" type="text">
+    </div>
+    <div class="field">
+      <span>ディレクトリ名</span>
+      <label class="exe"><input type="radio" name="local-name-mode" value="title" checked>
+        <span>ゲーム名を使用 <code id="local-name-title" class="muted"></code></span></label>
+      <label class="exe"><input type="radio" name="local-name-mode" value="romaji">
+        <span>ゲーム名をローマ字にする <code id="local-name-romaji" class="muted"></code></span></label>
+      <label class="exe"><input type="radio" name="local-name-mode" value="custom">
+        <span>入力する</span></label>
+      <input id="local-name" type="text" placeholder="例: my_game" disabled>
+    </div>
+    <div class="field">
+      <span>アーカイブ・ディレクトリの場所（ディレクトリの場合も中身をコピーします）</span>
+      <div><code id="local-source-label" class="muted">（未選択）</code>
+        <button id="local-pick" type="button">選ぶ</button></div>
+    </div>
+    <div class="field">
+      <span>インストール先</span>
+      <select id="local-install-dir"></select>
+    </div>
+    <div class="field">
+      <span>使う Proton（Steam に登録するときに割り当てます）</span>
+      <select id="local-tool"></select>
+    </div>
+    <p id="local-note" class="muted"></p>
+  </div>
+  <div class="dialog-foot">
+    <button id="local-cancel" type="button">キャンセル</button>
+    <button id="local-submit" type="button" class="primary">登録</button>
+  </div>
+</dialog>
+
+<dialog id="import-dialog">
+  <div class="dialog-body">
+    <h2 id="import-heading" style="margin-top:0;font-size:15px">取り込むものを選ぶ</h2>
+    <div class="field">
+      <span>取り込み元</span>
+      <select id="import-root"></select>
+    </div>
+    <p class="muted" id="import-where"></p>
+    <div id="import-list"></div>
+  </div>
+  <div class="dialog-foot">
+    <button id="import-cancel" type="button">キャンセル</button>
+    <button id="import-choose-dir" type="button" class="primary">このディレクトリを取り込む</button>
+  </div>
+</dialog>
+
+<dialog id="run-dialog">
+  <div class="dialog-body">
+    <h2 style="margin-top:0;font-size:15px">実行する</h2>
+    <p class="muted" id="run-intro"></p>
+    <div class="field">
+      <span>引数（空欄なら付けません）</span>
+      <input id="run-args" type="text">
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="run-use-launch" checked>
+        このゲームの起動オプションを使う（ゲームと同じ言語設定などで実行します）</label>
+      <div class="muted" id="run-launch"></div>
+    </div>
+    <div class="field">
+      <span>実行する exe</span>
+      <div id="run-list"></div>
+    </div>
+    <div id="run-output" class="muted"></div>
+  </div>
+  <div class="dialog-foot">
+    <button id="run-cancel" type="button">閉じる</button>
+  </div>
+</dialog>
+
 <dialog id="patch-dialog">
   <div class="dialog-body">
     <h2 style="margin-top:0;font-size:15px">パッチを当てる</h2>
     <p class="muted">
-      exe を、当てる先のゲームの Proton プレフィックスで実行します。
+      exe や msi を、当てる先のゲームの Proton プレフィックスで実行します。
       割り当てられている Proton は自動で選ばれます。
     </p>
     <div class="field">
       <span>当てる先のゲーム（Steam に登録し、一度起動したものだけ）</span>
       <select id="patch-target"></select>
+    </div>
+    <div class="field">
+      <span>実行するものの場所</span>
+      <select id="patch-source">
+        <option value="work">この作品の中</option>
+        <option value="runtime">共通パッチ置き場（ランタイム・コーデックなど）</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>引数（インストーラに渡すもの。空欄なら付けません）</span>
+      <input id="patch-args" type="text" placeholder="例: /quiet /norestart">
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="patch-use-launch" checked>
+        当てる先のゲームの起動オプションを使う（ゲームと同じ言語設定などで実行します）</label>
+      <div class="muted" id="patch-launch"></div>
     </div>
     <div class="field">
       <span>実行するパッチ</span>
@@ -617,6 +735,40 @@ function render() {
   syncHeaderHeight();
 }
 
+// Steam への登録状態の札。ライブラリと自由登録で共通。
+function steamTagHtml(item) {
+  if (item.steam_foreign) {
+    // 別環境のショートカットと同名。触るとそちらを壊すので操作させない。
+    return '<span class="tag steam-foreign" title="同じ名前のショートカットが'
+      + '別の環境 (別 OS) のものとして Steam にあります。このまま登録・解除すると'
+      + 'そちらを書き換えるため、操作できません">別環境と重複</span>';
+  }
+  return item.steam_registered === true
+    ? '<span class="tag steam-yes">Steam登録済み</span>'
+    : item.steam_registered === false
+      ? '<span class="tag steam-no">Steam未登録</span>'
+      : '<span class="tag unknown" title="Steam が見つからないため確認できません">登録状態不明</span>';
+}
+
+// Steam を書き換えるボタンを塞ぐときの属性。塞がないなら空文字。
+// Steam 起動中に押しても、Steam の終了時に書き換えが捨てられるだけなので塞ぐ。
+// 別環境の登録と名前がぶつかっている場合も、そちらを壊すので塞ぐ。
+function steamBlockedAttr(item) {
+  if (steamRunning) return ' disabled title="Steam 起動中は操作できません"';
+  if (item.steam_foreign) {
+    return ' disabled title="別環境の登録と名前がぶつかっています。登録名を変えるか Steam 側で整理してください"';
+  }
+  return "";
+}
+
+// 「実行」のボタン。ゲームの Proton 環境は Steam の登録 (AppID) に結び付くので、
+// 登録してからでないと押せない。
+function runButtonHtml(item) {
+  return item.steam_app_id
+    ? `<button data-run-game="${esc(item.id)}" title="設定用のアプリなど、ゲームの中の exe を同じ環境で実行">実行</button>`
+    : '<button disabled title="Steam に登録すると実行できます（ゲームの Proton 環境が要るため）">実行</button>';
+}
+
 // 1 行ぶんの HTML。中身は item と、その作品に走っているジョブで決まる。
 function rowHtml(item) {
   // 更新の有無を判定できない作品が多い (DLsite が upgrade_date を返さない)。
@@ -632,19 +784,7 @@ function rowHtml(item) {
   // 取得しただけなのか Steam に登録したのかは、更新の状態とは別の話。
   // 同じタグに混ぜると読み取りにくいので、並べて出す。
   // 対象はゲームだけ (マンガやボイスは Steam に登録しない)。
-  let steamTag = "";
-  if (item.installed && item.category === "game" && item.steam_foreign) {
-    // 別環境のショートカットと同名。触るとそちらを壊すので操作させない。
-    steamTag = '<span class="tag steam-foreign" title="同じ名前のショートカットが'
-      + '別の環境 (別 OS) のものとして Steam にあります。このまま登録・解除すると'
-      + 'そちらを書き換えるため、操作できません">別環境と重複</span>';
-  } else if (item.installed && item.category === "game") {
-    steamTag = item.steam_registered === true
-      ? '<span class="tag steam-yes">Steam登録済み</span>'
-      : item.steam_registered === false
-        ? '<span class="tag steam-no">Steam未登録</span>'
-        : '<span class="tag unknown" title="Steam が見つからないため確認できません">登録状態不明</span>';
-  }
+  const steamTag = item.installed && item.category === "game" ? steamTagHtml(item) : "";
   const steam = item.steam_app_id
     ? `<div class="muted">Steam: ${esc(item.steam_title)}</div>` : "";
   // 取得中の作品は、行のボタンでも進行が分かるようにする。
@@ -666,19 +806,13 @@ function rowHtml(item) {
       job.cancellable && !job.cancel_requested
         ? `<button data-cancel="${job.id}">中止</button>`
         : `<button disabled title="${
-            job.cancel_requested ? "中止しています" : "展開中は中止できません"
+            job.cancel_requested ? "中止しています" : "展開やコピーの途中は中止できません"
           }">中止</button>`);
   } else {
     actions.push(
       `<button data-download="${esc(item.id)}">${
         item.installed ? "再取得" : "取得"}</button>`);
-    // Steam 起動中に押しても、Steam の終了時に書き換えが捨てられるだけなので塞ぐ。
-    // 別環境の登録と名前がぶつかっている場合も、そちらを壊すので塞ぐ。
-    const steamBlocked = steamRunning
-      ? ' disabled title="Steam 起動中は操作できません"'
-      : item.steam_foreign
-        ? ' disabled title="別環境の登録と名前がぶつかっています。登録名を変えるか Steam 側で整理してください"'
-        : "";
+    const steamBlocked = steamBlockedAttr(item);
     if (item.installed && item.category === "game") {
       actions.push(
         `<button data-steam="${esc(item.id)}"${steamBlocked}>Steam登録</button>`);
@@ -687,6 +821,7 @@ function rowHtml(item) {
       actions.push(
         `<button data-unsteam="${esc(item.id)}"${steamBlocked}>解除</button>`);
     }
+    if (item.installed && item.category === "game") actions.push(runButtonHtml(item));
     if (item.installed) {
       // DLC は本編と別作品として売られているので、どの作品からでも開ける
       actions.push(`<button data-link="${esc(item.id)}" title="本編や DLC と重ねる">DLC</button>`);
@@ -734,9 +869,6 @@ function rowHtml(item) {
   </tr>`;
 }
 
-//: 前回描いた行の中身。変わっていない行を作り直さないために覚えておく。
-let renderedRows = new Map();
-
 /**
  * 行を差し替える。**中身が変わった行だけ**を作り直す。
  *
@@ -745,8 +877,9 @@ let renderedRows = new Map();
  * (押した要素が文書から外れ、click の着地点がボタンでなくなる)。
  * 変わらない行の要素をそのまま使えば、その事故は起きない。
  */
-function applyRows(rows) {
-  const tbody = $("rows");
+function applyRows(rows, tbody = $("rows")) {
+  // 前回描いた行の中身。変わっていない行を作り直さないために、一覧ごとに覚えておく。
+  const renderedRows = tbody.__rendered || new Map();
 
   const existing = new Map();
   for (const tr of tbody.children) {
@@ -779,7 +912,7 @@ function applyRows(rows) {
     cursor = following;
   }
 
-  renderedRows = new Map(rows.map((row) => [row.id, row.html]));
+  tbody.__rendered = new Map(rows.map((row) => [row.id, row.html]));
 }
 
 $("category").onchange = render;
@@ -812,6 +945,9 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.dataset.steam) await openSteamDialog(target.dataset.steam);
+  if (target.dataset.localImage) await openImport("image", target.dataset.localImage);
+  if (target.dataset.localArchive) await deleteLocalArchive(target);
+  if (target.dataset.runGame) await openRunDialog(target.dataset.runGame);
   if (target.dataset.link) await openLinkDialog(target.dataset.link);
   if (target.dataset.patch) await openPatchDialog(target.dataset.patch);
 
@@ -819,7 +955,7 @@ document.addEventListener("click", async (event) => {
     if (!(await ensureSteamStopped())) return;
     try {
       await post("/api/steam/unregister", { work_id: target.dataset.unsteam });
-      await load(false);
+      await reloadLists();
     } catch (error) { notice(error.message); }
   }
 
@@ -851,13 +987,15 @@ document.addEventListener("click", async (event) => {
       lines.push("重ねたファイルは相手側に残ります（作品間でDLCを適用したという情報は消えます）。");
     }
     lines.push("");
-    lines.push("DLsite からいつでも取り直せますが、この操作は元に戻せません。");
+    lines.push(preview.origin === "local"
+      ? "この操作は元に戻せません（取り込み直すには、元のアーカイブかディレクトリが要ります）。"
+      : "DLsite からいつでも取り直せますが、この操作は元に戻せません。");
 
     if (!confirm(lines.join("\n"))) { target.disabled = false; return; }
     try {
       const r = await post("/api/delete", { work_id: workId });
       notice(r.message);
-      await load(false);
+      await reloadLists();
     } catch (error) { notice(error.message); target.disabled = false; }
   }
 });
@@ -897,9 +1035,12 @@ async function openSteamDialog(workId) {
     // 起動オプションは表示するだけ。任意のコマンドを書けるので、画面からは
     // 変えさせない (変更は Steam のプロパティか config.json で行う)。
     $("steam-launch").textContent = info.launch_options || "（なし）";
-    $("steam-launch-note").textContent = info.launch_options_source === "steam"
+    // config.json の値は全ゲーム共通の既定値。ゲームごとに変えたいときは、登録したあと
+    // Steam 側で設定してもらう (画面から変えさせない理由は上のとおり)。
+    $("steam-launch-note").innerHTML = info.launch_options_source === "steam"
       ? "Steam に設定済みの内容をそのまま使います。変更は Steam のゲームのプロパティから行ってください。"
-      : "config.json の steam_launch_options を使います。変更は config.json で行ってください。";
+      : "config.json の steam_launch_options を使います。変更は config.json で行ってください。"
+        + "<br>個別設定はSteam上で行ってください。";
 
     const steam = data.steam;
     $("steam-note").textContent = steam.running
@@ -934,7 +1075,7 @@ $("steam-submit").onclick = async () => {
     dialogWork = null;
     $("steam-dialog").close();
     notice("");
-    await load(false);
+    await reloadLists();
     $("result").textContent =
       `「${result.title}」を Steam に登録しました (AppID ${result.app_id})。` +
       " Steam を起動すると出てきます。";
@@ -947,7 +1088,7 @@ $("steam-submit").onclick = async () => {
 };
 
 // ---- タブ ----------------------------------------------------------
-const VIEWS = ["library", "proton", "status", "settings"];
+const VIEWS = ["library", "local", "proton", "status", "settings"];
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.onclick = () => {
     // 設定を書きかけたまま移ると消えてしまう。
@@ -962,6 +1103,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     });
     // 見出しの高さは表示中の内容で変わる。貼り付く操作列の位置を合わせ直す。
     syncHeaderHeight();
+    if (tab.dataset.tab === "local") loadLocal();
     if (tab.dataset.tab === "proton") loadProton();
     if (tab.dataset.tab === "status") loadStatus();
     if (tab.dataset.tab === "settings") loadSettings();
@@ -1323,15 +1465,16 @@ function renderJob(job, queued) {
   const running = job.status === "running";
   const waiting = queued > 0
     ? `<span class="muted">ほかに ${queued} 件が順番待ち</span>` : "";
+  const sizes = job.written || job.total
+    ? ` ${job.written_label}${job.total ? " / " + job.total_label : ""}` : "";
   const line = running
-    ? `${job.current || "準備中"} ${job.written_label}${
-        job.total ? " / " + job.total_label : ""}${percent == null ? "" : ` (${percent}%)`}`
+    ? `${job.current || "準備中"}${sizes}${percent == null ? "" : ` (${percent}%)`}`
     : job.message;
 
   const cancel = running && job.cancellable && !job.cancel_requested
     ? `<button data-cancel="${job.id}">中止</button>`
     : running
-      ? `<button disabled title="展開中は中止できません">中止</button>`
+      ? `<button disabled title="展開やコピーの途中は中止できません">中止</button>`
       : "";
 
   return `<div class="job ${job.status}">
@@ -1380,8 +1523,8 @@ async function pollJobs() {
 
     // 1 件終わるごとに一覧を取り直す。取り直さないと導入済みかどうかが
     // 古いままで、終わった作品の行が「取得」に戻って見える。
-    if (newlyFinished) await load(false);
-    else render();
+    if (newlyFinished) await reloadLists();
+    else { render(); renderLocal(); }
 
     if (outdated()) return;
     if (active) {
@@ -1653,6 +1796,423 @@ $("link-pick-target").onclick = () => {
   });
 };
 
+// ---- 自由登録 ------------------------------------------------------
+// DLsite 以外のゲームを取り込む。DLsite には問い合わせないので、ログインしていなくても使える。
+// 取り込めるのは、設定の取り込み元 (import_dirs) の中だけ。場所は「何番目の取り込み元か」と、
+// その中の相対パスでやり取りする。
+let localData = null;
+let localDescending = false;
+//: 新規登録で選んだ取り込み元 { root, path, label }
+let localSource = null;
+let localNamesTimer = null;
+
+/** いま見ている一覧を読み直す。操作のあとに呼ぶ。 */
+async function reloadLists() {
+  if (!$("view-local").hidden) await loadLocal();
+  else await load(false);
+}
+
+function showResult(message) {
+  notice("");
+  $("result").textContent = message;
+  $("result").style.display = "block";
+}
+
+async function loadLocal() {
+  $("local-reload").disabled = true;
+  try {
+    localData = await call("/api/local");
+    canQuitSteam = !(localData.steam && localData.steam.can_quit_steam === false);
+    setSteamRunning(!!(localData.steam && localData.steam.running));
+    renderLocal();
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    $("local-reload").disabled = false;
+  }
+}
+
+function renderLocal() {
+  if (!localData) return;
+  const term = $("local-search").value.trim().toLowerCase();
+  const key = $("local-sort").value;
+  const items = localData.items
+    .filter((item) => !term || item.title.toLowerCase().includes(term)
+                      || item.id.toLowerCase().includes(term))
+    .sort((a, b) => {
+      const result = key === "installed"
+        ? (a.installed_sort < b.installed_sort ? -1 : a.installed_sort > b.installed_sort ? 1 : 0)
+        : byTitle(a, b);
+      return localDescending ? -result : result;
+    });
+  applyRows(items.map((item) => ({ id: item.id, html: localRowHtml(item) })), $("local-rows"));
+
+  const roots = localData.roots.map((root) =>
+    `<code>${esc(root.path)}</code>${root.exists ? "" : '<span class="warn">（見つかりません）</span>'}`);
+  $("local-roots").innerHTML = roots.length
+    ? `取り込み元: ${roots.join("、")}`
+    : `<span class="warn">取り込み元がありません。「設定」タブの「自由登録の取り込み元」で場所を指定してください。</span>`;
+  $("local-empty").textContent = localData.items.length
+    ? "" : "まだ登録していません。「新規登録」から取り込めます。";
+}
+
+function localRowHtml(item) {
+  const tag = item.installed
+    ? '<span class="tag installed">導入済み</span>'
+    : `<span class="tag">${esc(item.status_label)}</span>`;
+
+  // 自由登録はゲームだけなので、導入済みなら Steam の登録状態を出す
+  const steamTag = item.installed ? steamTagHtml(item) : "";
+
+  const sourceName = item.source.split(/[\\/]/).filter(Boolean).pop() || "";
+  const source = sourceName
+    ? `<div class="muted">取り込み元: ${esc(sourceName)}${
+        item.source_kind === "archive" && !item.archive_exists ? "（アーカイブは削除済み）" : ""}</div>`
+    : "";
+  const steam = item.steam_app_id
+    ? `<div class="muted">Steam: ${esc(item.steam_title)}</div>` : "";
+  const image = item.has_image ? '<div class="muted">画像: 設定済み</div>' : "";
+
+  const job = jobsByWork[item.id];
+  const actions = [];
+  if (job) {
+    actions.push(`<span class="btn-progress muted"><span class="spinner"></span>処理中</span>`);
+  } else {
+    const steamBlocked = steamBlockedAttr(item);
+    if (item.installed) {
+      actions.push(`<button data-steam="${esc(item.id)}"${steamBlocked}>Steam登録</button>`);
+    }
+    if (item.steam_app_id) {
+      actions.push(`<button data-unsteam="${esc(item.id)}"${steamBlocked}>解除</button>`);
+    }
+    if (item.installed) {
+      actions.push(runButtonHtml(item));
+      actions.push(`<button data-link="${esc(item.id)}" title="本編や DLC と重ねる">DLC</button>`);
+      actions.push(`<button data-patch="${esc(item.id)}" title="exe を実行して当てるパッチ">パッチ</button>`);
+      actions.push(`<button data-local-image="${esc(item.id)}" title="表紙・背景に使う画像を選ぶ">画像</button>`);
+    }
+    if (item.archive_exists) {
+      actions.push(item.archive_deletable
+        ? `<button data-local-archive="${esc(item.id)}" title="取り込み元のアーカイブを削除（${
+            esc(item.archive_label)}）">アーカイブ削除</button>`
+        : '<button disabled title="取り込み元の外にあるため削除できません">アーカイブ削除</button>');
+    }
+    if (item.steam_app_id) {
+      actions.push('<button disabled title="先に Steam 登録を解除してください">削除</button>');
+    } else {
+      actions.push(
+        `<button data-delete="${esc(item.id)}" title="取り込んだファイルを削除">削除</button>`);
+    }
+  }
+
+  return `<tr>
+    <td><code>${esc(item.id)}</code></td>
+    <td>${tag}${steamTag ? "<br>" + steamTag : ""}</td>
+    <td>${esc(item.title)}${source}${steam}${image}</td>
+    <td class="muted">${esc(item.installed_at)}</td>
+    <td><div class="row-actions">${actions.join("")}</div></td>
+  </tr>`;
+}
+
+$("local-search").oninput = renderLocal;
+$("local-sort").onchange = renderLocal;
+$("local-order").onclick = () => {
+  localDescending = !localDescending;
+  $("local-order").textContent = localDescending ? "降順" : "昇順";
+  renderLocal();
+};
+$("local-reload").onclick = loadLocal;
+
+async function deleteLocalArchive(button) {
+  const workId = button.dataset.localArchive;
+  const item = localData && localData.items.find((i) => i.id === workId);
+  if (!item) return;
+  if (!confirm(`${item.title}\n\n取り込み元のアーカイブ（${item.archive_label}）を削除します。`
+               + "\n分割されている場合は、続きのファイルもまとめて削除します。"
+               + "\n\n取り込んだゲームはそのまま残ります。この操作は元に戻せません。")) return;
+  button.disabled = true;
+  try {
+    const r = await post("/api/local/archive/delete", { work_id: workId });
+    showResult(r.message);
+    await loadLocal();
+  } catch (error) { notice(error.message); button.disabled = false; }
+}
+
+// ---- 新規登録 ----
+function localNameMode() {
+  const chosen = document.querySelector('input[name="local-name-mode"]:checked');
+  return chosen ? chosen.value : "title";
+}
+
+async function updateLocalNames() {
+  const title = $("local-title").value.trim();
+  if (!title) {
+    $("local-name-title").textContent = "";
+    $("local-name-romaji").textContent = "";
+    return;
+  }
+  try {
+    const r = await call(`/api/local/names?title=${encodeURIComponent(title)}`);
+    // 打ち進めている間に古い応答が遅れて届くことがある
+    if ($("local-title").value.trim() !== title) return;
+    $("local-name-title").textContent = r.title;
+    $("local-name-romaji").textContent = r.romaji;
+  } catch (error) { /* 候補が出ないだけ。登録のときに改めて確かめる */ }
+}
+
+$("local-title").oninput = () => {
+  clearTimeout(localNamesTimer);
+  localNamesTimer = setTimeout(updateLocalNames, 300);
+};
+
+document.querySelectorAll('input[name="local-name-mode"]').forEach((radio) => {
+  radio.onchange = () => {
+    const custom = localNameMode() === "custom";
+    $("local-name").disabled = !custom;
+    if (custom && !$("local-name").value) {
+      $("local-name").value = $("local-name-romaji").textContent || $("local-name-title").textContent;
+    }
+  };
+});
+
+$("local-new").onclick = async () => {
+  notice("");
+  await loadLocal();
+  if (!localData) return;
+
+  $("local-title").value = "";
+  $("local-name").value = "";
+  $("local-name").disabled = true;
+  document.querySelector('input[name="local-name-mode"][value="title"]').checked = true;
+  $("local-name-title").textContent = "";
+  $("local-name-romaji").textContent = "";
+  localSource = null;
+  $("local-source-label").textContent = "（未選択）";
+
+  $("local-install-dir").innerHTML = localData.install_dirs
+    .map((dir) => `<option value="${esc(dir)}">${esc(dir)}${
+      dir === localData.install_dir ? "（既定）" : ""}</option>`).join("");
+  $("local-install-dir").value = localData.install_dir;
+
+  const tools = localData.compat_tools;
+  $("local-tool").innerHTML = [`<option value="">（割り当てない）</option>`].concat(
+    tools.map((tool) => `<option value="${esc(tool.value)}">${esc(tool.label)}${
+      tool.value === localData.default_tool ? "（既定）" : ""}</option>`)).join("");
+  $("local-tool").value = localData.default_tool || "";
+
+  $("local-note").textContent = localData.roots.some((root) => root.exists)
+    ? "" : "取り込み元がありません。「設定」タブの「自由登録の取り込み元」で場所を指定してください。";
+  $("local-dialog").showModal();
+};
+
+$("local-cancel").onclick = () => $("local-dialog").close();
+$("local-pick").onclick = () => openImport("source", null);
+
+// アーカイブ名から、ゲーム名の初期値を作る (拡張子と分割の番号を落とす)
+function titleFromSource(name) {
+  return name
+    .replace(/\.\d{3}$/, "")
+    .replace(/\.part\d+\.rar$/i, "")
+    .replace(/\.(zip|rar|7z)$/i, "");
+}
+
+function pickLocalSource(root, path, isDirectory) {
+  const rootInfo = localData.roots.find((r) => r.index === root);
+  const name = path.split("/").filter(Boolean).pop() || "";
+  localSource = { root, path };
+  $("local-source-label").textContent =
+    `${rootInfo ? rootInfo.path : ""}${path ? "/" + path : ""}${isDirectory ? "/（ディレクトリ）" : ""}`;
+  if (!$("local-title").value.trim() && name) {
+    $("local-title").value = isDirectory ? name : titleFromSource(name);
+    updateLocalNames();
+  }
+}
+
+$("local-submit").onclick = async () => {
+  if (!localSource) { notice("取り込むアーカイブかディレクトリを選んでください。"); return; }
+  $("local-submit").disabled = true;
+  try {
+    const r = await post("/api/local/import", {
+      title: $("local-title").value,
+      name_mode: localNameMode(),
+      name: $("local-name").value,
+      root: localSource.root,
+      path: localSource.path,
+      install_dir: $("local-install-dir").value,
+      compat_tool: $("local-tool").value,
+    });
+    $("local-dialog").close();
+    showResult(`${r.work_id} として取り込みを始めました。進み具合は上に表示されます。`);
+    pollJobs();
+  } catch (error) {
+    // ダイアログの裏に出ても気付けないので、ダイアログの中にも出す
+    $("local-note").innerHTML = `<span class="ng">${esc(error.message)}</span>`;
+  } finally {
+    $("local-submit").disabled = false;
+  }
+};
+
+// ---- 取り込み元を見る ----
+// 取り込むもの (mode "source") と、表紙の画像 (mode "image") の両方を選ぶ。
+let importState = null;
+
+async function openImport(mode, workId) {
+  notice("");
+  if (!localData) await loadLocal();
+  if (!localData) return;
+  const roots = localData.roots.filter((root) => root.exists);
+  if (!roots.length) {
+    notice("取り込み元がありません。「設定」タブの「自由登録の取り込み元」で場所を指定してください。");
+    return;
+  }
+  importState = { mode, workId, root: roots[0].index, path: "" };
+  $("import-heading").textContent = mode === "image"
+    ? "表紙・背景に使う画像を選ぶ（PNG か JPEG）" : "取り込むアーカイブかディレクトリを選ぶ";
+  $("import-choose-dir").hidden = mode !== "source";
+  $("import-root").innerHTML = roots
+    .map((root) => `<option value="${root.index}">${esc(root.path)}</option>`).join("");
+  $("import-root").value = String(importState.root);
+  await renderImport();
+  $("import-dialog").showModal();
+}
+
+async function renderImport() {
+  const { mode, root, path } = importState;
+  let r;
+  try {
+    r = await call(`/api/local/browse?root=${root}&path=${encodeURIComponent(path)}&mode=${mode}`);
+  } catch (error) {
+    $("import-list").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
+    return;
+  }
+  importState.path = r.relative;
+  $("import-where").textContent = r.relative ? `/${r.relative}` : "（取り込み元の直下）";
+  // 直下を選ぶと、取り込み元の中身すべて (他のゲームのアーカイブも) をコピーしてしまう
+  $("import-choose-dir").disabled = !r.relative;
+  const up = r.parent !== null ? `<div><button data-iup="${esc(r.parent)}">.. 上へ</button></div>` : "";
+  const dirs = r.directories.map((d) =>
+    `<div><button data-idir="${esc(d.relative)}">${esc(d.name)}/</button></div>`).join("");
+  const files = r.files.map((f) => f.selectable
+    ? `<div><button data-ifile="${esc(f.relative)}">${esc(f.name)}</button>
+         <span class="muted">${esc(f.size_label)}</span></div>`
+    : `<div class="muted">${esc(f.name)} <span>${esc(f.size_label)}</span></div>`).join("");
+  const hint = mode === "image"
+    ? "画像を押すと設定します。" : "アーカイブを押すと選びます。ディレクトリを取り込むときは、その中に入ってから下のボタンを押します。";
+  $("import-list").innerHTML = up + dirs
+    + (files ? `<div class="muted" style="margin-top:6px">ファイル:</div>${files}` : "")
+    + `<p class="muted">${hint}${r.truncated ? "（多すぎるため一部だけを表示しています）" : ""}</p>`;
+}
+
+$("import-root").onchange = async () => {
+  importState.root = Number($("import-root").value);
+  importState.path = "";
+  await renderImport();
+};
+
+$("import-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button || !importState) return;
+  if (button.dataset.iup !== undefined) {
+    importState.path = button.dataset.iup;
+    await renderImport();
+  } else if (button.dataset.idir !== undefined) {
+    importState.path = button.dataset.idir;
+    await renderImport();
+  } else if (button.dataset.ifile !== undefined) {
+    const picked = button.dataset.ifile;
+    if (importState.mode === "source") {
+      pickLocalSource(importState.root, picked, false);
+      $("import-dialog").close();
+      return;
+    }
+    button.disabled = true;
+    try {
+      const r = await post("/api/local/image", {
+        work_id: importState.workId, root: importState.root, path: picked,
+      });
+      $("import-dialog").close();
+      showResult(r.message);
+      await loadLocal();
+    } catch (error) {
+      $("import-list").insertAdjacentHTML("afterbegin", `<div class="ng">${esc(error.message)}</div>`);
+      button.disabled = false;
+    }
+  }
+});
+
+$("import-cancel").onclick = () => $("import-dialog").close();
+$("import-choose-dir").onclick = () => {
+  pickLocalSource(importState.root, importState.path, true);
+  $("import-dialog").close();
+};
+
+// ---- ゲームの中の exe を実行する -------------------------------------
+// 設定用のアプリが本体と別になっていることが多い。Steam には本体しか登録しないので、
+// それ以外はここから、同じゲームの Proton 環境 (同じ AppID) で動かす。
+let runInfo = null;
+
+async function openRunDialog(workId) {
+  notice("");
+  runInfo = null;
+  let info;
+  try {
+    info = await call("/api/executables?work_id=" + encodeURIComponent(workId));
+  } catch (error) { notice(error.message); return; }
+
+  runInfo = info;
+  $("run-intro").textContent =
+    `${info.steam_title} の Proton 環境（AppID ${info.app_id}）で exe を実行します。`
+    + "設定用のアプリなどに使います。";
+  $("run-args").value = "";
+  $("run-use-launch").checked = true;
+  // 登録済みのゲームなので、Steam に設定してある起動オプションを見せる
+  const options = info.launch_options_source === "steam" ? info.launch_options : "";
+  $("run-launch").textContent = !options
+    ? "このゲームには起動オプションがありません。"
+    : options.includes("%command%")
+      ? `起動オプション: ${options}`
+      : `起動オプション: ${options}（%command% が無いため、使いません）`;
+  // アンインストーラは出さない。間違えて押すとゲームが壊れる (削除はこのツールで行う)。
+  // パッチの一覧でも同じく外している。
+  const candidates = info.candidates.filter(
+    (exe) => !/unins/i.test(exe.relative.split("/").pop()));
+  $("run-list").innerHTML = candidates.length
+    ? candidates.map((exe) => `<div>
+        <button data-exe="${esc(exe.relative)}">実行</button>
+        <span>${esc(exe.relative)}</span>
+        <span class="muted">${esc(exe.size_label)}${
+          exe.path === info.selected ? " ・Steam に登録中" : ""}${
+          exe.suspicious ? " ・ゲーム本体でない可能性" : ""}</span>
+      </div>`).join("")
+    : '<div class="muted">実行ファイルが見つかりませんでした。</div>';
+  $("run-output").textContent = "";
+  $("run-dialog").showModal();
+}
+
+$("run-cancel").onclick = () => $("run-dialog").close();
+
+$("run-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-exe]");
+  if (!button || !runInfo) return;
+  const relative = button.dataset.exe;
+  button.disabled = true;
+  $("run-output").textContent = `${relative} を実行しています…（画面が出たら操作してください）`;
+  try {
+    const r = await post("/api/run", {
+      work_id: runInfo.work_id, relative, args: $("run-args").value,
+      use_launch_options: $("run-use-launch").checked,
+    });
+    $("run-output").innerHTML = `<div class="${r.ok ? "" : "ng"}">${esc(r.message)}</div>
+      <div class="muted">Proton: ${esc(r.proton)}${
+        r.launch_options ? ` ・起動オプション: ${esc(r.launch_options)}` : ""}</div>
+      ${r.output ? `<pre class="muted" style="white-space:pre-wrap">${esc(r.output)}</pre>` : ""}`;
+  } catch (error) {
+    $("run-output").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ---- パッチを当てる ------------------------------------------------
 // 特典セットのように 1 作品に 12 個の exe が入っていることがある。
 // ディレクトリ名まで見せて 1 つずつ選べるようにする。
@@ -1670,27 +2230,78 @@ async function openPatchDialog(workId) {
   const targets = info.targets.filter((t) => t.registered);
   $("patch-target").innerHTML = targets.length
     ? targets.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${
-        t.same_maker ? "" : "（別の出品者）"}</option>`).join("")
+        t.other_maker ? "（別の出品者）" : ""}</option>`).join("")
     : `<option value="">Steam に登録済みのゲームがありません</option>`;
   if (targets.some((t) => t.id === workId)) $("patch-target").value = workId;
 
+  $("patch-source").value = "work";
+  $("patch-args").value = "";
+  $("patch-use-launch").checked = true;
   renderPatchList();
   $("patch-output").textContent = "";
   $("patch-dialog").showModal();
 }
 
+// 「実行済み」は当てた先のゲームごとに記録している。選んだゲームの記録で印を付ける。
+function installedOnTarget() {
+  const target = patchWork.targets.find((t) => t.id === $("patch-target").value);
+  return new Set(target ? target.installed : []);
+}
+
+function patchRow(p, root) {
+  const done = installedOnTarget().has(p.key);
+  return `<div>
+    <button data-run="${esc(p.relative)}" data-root="${root ?? ""}">${done ? "再実行" : "実行"}</button>
+    <span>${esc(p.relative)}</span>
+    <span class="muted">${esc(p.size_label)}${done ? " ・このゲームに実行済み" : ""}</span>
+  </div>`;
+}
+
+// 選んだゲームの起動オプションを見せる。日本語のインストーラの文字化けは、
+// ここに LANG=ja_JP.UTF-8 などがあれば、使うことで避けられる。
+function renderPatchLaunch() {
+  const target = patchWork.targets.find((t) => t.id === $("patch-target").value);
+  const options = target ? target.launch_options : null;
+  let text;
+  if (!options) {
+    text = "このゲームには起動オプションがありません。";
+  } else if (!options.includes("%command%")) {
+    text = `起動オプション: ${options}（%command% が無いため、使いません）`;
+  } else {
+    text = `起動オプション: ${options}`;
+  }
+  $("patch-launch").textContent = text;
+}
+
 function renderPatchList() {
   if (!patchWork) return;
-  $("patch-list").innerHTML = patchWork.patches.length
-    ? patchWork.patches.map((p) => `<div>
-        <button data-run="${esc(p.relative)}">${p.applied ? "再実行" : "実行"}</button>
-        <span>${esc(p.relative)}</span>
-        <span class="muted">${esc(p.size_label)}${p.applied ? " ・実行済み" : ""}</span>
-      </div>`).join("")
-    : `<div class="muted">実行できる exe が見つかりませんでした。</div>`;
+  renderPatchLaunch();
+  if ($("patch-source").value === "work") {
+    $("patch-list").innerHTML = patchWork.patches.length
+      ? patchWork.patches.map((p) => patchRow(p, null)).join("")
+      : `<div class="muted">この作品の中に、実行できる exe が見つかりませんでした。</div>`;
+    return;
+  }
+
+  const roots = patchWork.runtimes;
+  if (!roots.length) {
+    $("patch-list").innerHTML = '<div class="muted">共通パッチ置き場がありません。'
+      + "「設定」タブの「共通パッチ置き場」で場所を指定してください。</div>";
+    return;
+  }
+  $("patch-list").innerHTML = roots.map((root) => {
+    const head = `<div class="muted" style="margin-top:6px"><code>${esc(root.path)}</code>${
+      root.exists ? "" : '<span class="warn">（見つかりません）</span>'}</div>`;
+    const rows = root.patches.length
+      ? root.patches.map((p) => patchRow(p, root.index)).join("")
+      : (root.exists ? '<div class="muted">exe や msi がありません。</div>' : "");
+    return head + rows;
+  }).join("");
 }
 
 $("patch-cancel").onclick = () => $("patch-dialog").close();
+$("patch-source").onchange = renderPatchList;
+$("patch-target").onchange = renderPatchList;
 
 $("patch-list").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-run]");
@@ -1699,15 +2310,21 @@ $("patch-list").addEventListener("click", async (event) => {
   if (!targetId) { notice("当てる先のゲームを選んでください。"); return; }
 
   const relative = button.dataset.run;
+  const source = $("patch-source").value;
   button.disabled = true;
   $("patch-output").textContent = `${relative} を実行しています…（画面が出たら操作してください）`;
   try {
-    const r = await post("/api/patch/run", { work_id: patchWork.work_id, relative, target_id: targetId });
+    const r = await post("/api/patch/run", {
+      work_id: patchWork.work_id, relative, target_id: targetId,
+      source, root: button.dataset.root, args: $("patch-args").value,
+      use_launch_options: $("patch-use-launch").checked,
+    });
     $("patch-output").innerHTML = `<div class="${r.ok ? "" : "ng"}">${esc(r.message)}</div>
-      <div class="muted">Proton: ${esc(r.proton)}</div>
+      <div class="muted">Proton: ${esc(r.proton)}${
+        r.launch_options ? ` ・起動オプション: ${esc(r.launch_options)}` : ""}</div>
       ${r.output ? `<pre class="muted" style="white-space:pre-wrap">${esc(r.output)}</pre>` : ""}`;
-    const found = patchWork.patches.find((p) => p.relative === relative);
-    if (found && r.ok) found.applied = true;
+    const target = patchWork.targets.find((t) => t.id === targetId);
+    if (target && r.ok && !target.installed.includes(r.key)) target.installed.push(r.key);
     renderPatchList();
   } catch (error) {
     $("patch-output").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
@@ -1875,6 +2492,7 @@ function setSteamRunning(running, note) {
     // ボタンの有効・無効は描画時に決めている。状態が変わったら描き直す。
     // (load() の中から呼ぶ場合はこの後どのみち render() が走る)
     if (data) render();
+    renderLocal();
     if (protonData && !$("view-proton").hidden) renderProton();
   }
 }

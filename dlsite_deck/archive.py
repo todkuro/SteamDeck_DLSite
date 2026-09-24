@@ -64,13 +64,16 @@ class ArchiveError(RuntimeError):
 class ArchivePlan:
     """ダウンロード済みファイル群の扱い方。"""
 
-    #: "zip" | "split_rar" | "passthrough"
+    #: "zip" | "split_rar" | "external" | "passthrough"
+    #:
+    #: "external" は外部ツールに先頭のファイルだけを渡して展開するもの (自由登録で選んだ
+    #: .rar / .7z など)。続きのファイルはツールが自分で探す。
     kind: str
     files: list[Path] = field(default_factory=list)
 
     @property
     def is_extractable(self) -> bool:
-        return self.kind in ("zip", "split_rar")
+        return self.kind in ("zip", "split_rar", "external")
 
 
 @dataclass
@@ -157,7 +160,7 @@ def extract(
         if plan.kind == "zip":
             _extract_zip(plan.files[0], staging)
         else:
-            _extract_split_rar(plan.files, staging)
+            _extract_with_tool(plan.files, staging)
 
         # 外部ツールはアーカイブ内のシンボリックリンクをそのまま作ることがある。
         # 外を指すリンクを残すと、あとで DLC を重ねるときなどにそれをたどって
@@ -183,15 +186,22 @@ def extract(
 
 
 def drop_escaping_links(root: Path) -> list[str]:
-    """``root`` の外を指すシンボリックリンクを取り除き、その一覧を返す。
+    """``root`` の外を指すシンボリックリンクと、絶対パスのリンクを取り除き、その一覧を返す。
 
-    中を指すリンク (Linux 版のゲームにある ``libfoo.so -> libfoo.so.1`` など) は
-    残す。判定はリンク先を実際に解いて行うので、``../`` の重ね掛けや絶対パス、
+    中を相対パスで指すリンク (Linux 版のゲームにある ``libfoo.so -> libfoo.so.1``
+    など) は残す。判定はリンク先を実際に解いて行うので、``../`` の重ね掛けや
     リンクを経由したリンクも見逃さない。行き先が無いリンクも、行き先の文字列を
     解いた結果が外なら取り除く。
 
+    **絶対パスのリンクは、中を指していても取り除く。** ``root`` はこのあと中身を
+    移して片付ける作業用ディレクトリなので、その中を絶対パスで指すリンクは、移した
+    あと必ず行き先を失う。新しい 7-Zip (25.01 で確認) は、アーカイブ内の
+    ``/etc/passwd`` のような絶対パスのリンクを、展開先の中を指すように書き換えて
+    作るため、このままでは行き先の無いリンクが作品の中に残っていた。
+
     ZIP は Python の zipfile で展開するのでリンクは作られない。外部ツールで
-    展開する分割 RAR のためにある。
+    展開するもの (分割 RAR、自由登録の .rar / .7z) と、自由登録でディレクトリを
+    コピーしたとき (リンクをリンクのままコピーする) のためにある。
     """
     base = root.resolve()
 
@@ -209,7 +219,8 @@ def drop_escaping_links(root: Path) -> list[str]:
     escaping = []
     for path in links:
         try:
-            target = (path.parent / os.readlink(path)).resolve()
+            raw = os.readlink(path)
+            target = None if os.path.isabs(raw) else (path.parent / raw).resolve()
         except (OSError, RuntimeError):
             # 解けない (循環など) ものも、中を指すと確かめられないので取り除く
             target = None
@@ -277,17 +288,20 @@ def _decode_zip_name(info: zipfile.ZipInfo) -> str:
     return info.filename
 
 
-def _extract_split_rar(files: list[Path], staging: Path) -> None:
-    """分割自己展開アーカイブを外部ツールで展開する。
+def _extract_with_tool(files: list[Path], staging: Path) -> None:
+    """ZIP 1 つ以外のアーカイブを、外部ツールで展開する。
 
-    先頭ファイルは ``.exe`` (SFX) なので、展開ツールが中身を RAR と認識できるよう
-    一時的に ``.rar`` へ改名し、終わったら必ず元に戻す。
+    DLsite の分割自己展開アーカイブと、自由登録で選んだ .rar / .7z / 分割アーカイブ
+    がここに来る。ツールには先頭のファイルだけを渡し、続きはツールが自分で探す。
+
+    分割自己展開アーカイブは先頭ファイルが ``.exe`` (SFX) なので、展開ツールが
+    中身を RAR と認識できるよう一時的に ``.rar`` へ改名し、終わったら必ず元に戻す。
     """
     first = files[0]
     tool = _find_rar_tool()
     if tool is None:
         raise ArchiveError(
-            "分割アーカイブの展開に必要なコマンドが見つかりません。"
+            "このアーカイブの展開に必要なコマンドが見つかりません。"
             "bsdtar / 7z / unar / unrar のいずれかを用意してください "
             "(SteamDeck では `flatpak install flathub org.gnome.FileRoller` など)。"
         )
