@@ -195,7 +195,9 @@
       </select>
       <button id="order" title="昇順・降順を切り替える">昇順</button>
       <button id="reload">再読み込み</button>
-      <button id="download-visible">表示中の未取得をまとめて取得</button>
+      <!-- 出さない。README の「短時間に大量の操作を行うのは避けてください」と矛盾するため。
+           一度に 1 件ずつ順番に取得はするが、押すだけで何十本も積めてしまう。 -->
+      <button id="download-visible" hidden>表示中の未取得をまとめて取得</button>
     </div>
     <div class="toolbar">
       <label for="install-dir" class="muted">インストール先</label>
@@ -1424,6 +1426,7 @@ $("settings-save").onclick = async () => {
 };
 
 // ---- まとめて取得 --------------------------------------------------
+// ボタンは隠してある (上の HTML の説明を参照)。戻すときは hidden を外すだけでよい。
 $("download-visible").onclick = async () => {
   const targets = visibleItems().filter((item) => !item.installed || item.outdated);
   if (!targets.length) { notice("表示中に取得対象がありません。"); return; }

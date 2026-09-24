@@ -61,7 +61,7 @@ class Config:
     strip_versions: bool = True
     #: 単一ディレクトリのみのアーカイブを展開先直下に引き上げるか
     flatten_single_root: bool = True
-    #: ゲーム以外の作品種別も対象に含めるか
+    #: コマンドラインの ``download --updates`` で、ゲーム以外の作品も対象に含めるか
     include_non_games: bool = False
     #: Steam の非 Steam ゲームとして自動登録するか
     register_to_steam: bool = False

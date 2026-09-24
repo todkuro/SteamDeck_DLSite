@@ -54,11 +54,7 @@ python3 -m dlsite_deck list --category manga
 python3 -m dlsite_deck download RJ123456
 ```
 
-未取得の作品をすべてダウンロードします。
-
-```bash
-python3 -m dlsite_deck download --all
-```
+未取得の作品をまとめてダウンロードするオプションはありません。DLsite に不正なアクセスとみなされないよう、短時間に大量のダウンロードを行わないためです。
 
 更新がある作品をダウンロードし直します。
 

@@ -104,7 +104,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     fetch = sub.add_parser("download", help="作品をダウンロードして展開する")
     fetch.add_argument("ids", nargs="*", help="作品 ID (RJ/VJ...)")
-    fetch.add_argument("--all", action="store_true", help="未取得の作品をすべて取得する")
     fetch.add_argument("--updates", action="store_true", help="更新がある作品を取り直す")
     fetch.add_argument("--force", action="store_true", help="導入済みでも取り直す")
     fetch.add_argument(
@@ -222,11 +221,14 @@ def _fetch_library(
 def _select(
     statuses: list[state.LibraryStatus],
     ids: list[str],
-    take_all: bool,
     updates_only: bool,
     include_non_games: bool,
 ) -> list[state.LibraryStatus]:
-    """コマンドライン指定から対象を絞る。"""
+    """コマンドライン指定から対象を絞る。
+
+    未取得の作品をすべて取得する ``--all`` は無くした。DLsite に不正なアクセスと
+    みなされないよう、短時間に大量の取得をさせないため (README の注意と同じ)。
+    """
     if ids:
         wanted = {value.upper() for value in ids}
         selected = [item for item in statuses if item.work.id.upper() in wanted]
@@ -241,8 +243,6 @@ def _select(
 
     if updates_only:
         return [item for item in pool if item.outdated]
-    if take_all:
-        return [item for item in pool if not item.installed]
     return []
 
 
@@ -449,15 +449,9 @@ def cmd_download(args) -> int:
     statuses = state.build_status(works, current)
 
     if args.ids:
-        targets = _select(statuses, args.ids, False, False, True)
+        targets = _select(statuses, args.ids, False, True)
     else:
-        targets = _select(
-            statuses,
-            [],
-            args.all,
-            args.updates,
-            cfg.include_non_games,
-        )
+        targets = _select(statuses, [], args.updates, cfg.include_non_games)
 
     if args.force and args.ids:
         pass  # 明示指定は常に対象
@@ -465,7 +459,7 @@ def cmd_download(args) -> int:
         targets = [item for item in targets if not item.installed or item.outdated]
 
     if not targets:
-        print("取得対象がありません。--all / --updates / 作品 ID を指定してください。")
+        print("取得対象がありません。作品 ID か --updates を指定してください。")
         return 0
 
     print(f"対象 {len(targets)} 件:")

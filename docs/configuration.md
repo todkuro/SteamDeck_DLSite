@@ -29,7 +29,7 @@ python3 -m dlsite_deck init
 | `delete_archives` | `true` | 展開後にアーカイブを削除するかどうか |
 | `strip_versions` | `true` | ディレクトリ名からバージョン番号を取り除くかどうか |
 | `flatten_single_root` | `true` | アーカイブの中身がディレクトリ 1 つだけの場合に、その中身を展開先の直下に移すかどうか |
-| `include_non_games` | `false` | ゲーム以外の作品も対象にするかどうか |
+| `include_non_games` | `false` | コマンドラインの `download --updates` で、ゲーム以外の作品も対象にするかどうか |
 | `register_to_steam` | `false` | ダウンロード後に自動で Steam に登録するかどうか |
 | `steam_userdata_dir` 🔒 | `""` | Steam の `userdata` ディレクトリ。空の場合は自動で探します |
 | `steam_grid_images` | `true` | 作品の画像をライブラリの表紙や背景に設定するかどうか |

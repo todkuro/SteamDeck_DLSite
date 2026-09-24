@@ -96,7 +96,7 @@ class CommandLineTest(unittest.TestCase):
             ["list", "--category", "game", "--updates"],
             ["list", "--all", "--installed"],
             ["download", "RJ123456", "--dry-run"],
-            ["download", "--all", "--install-dir", "/games", "--keep-archives"],
+            ["download", "--updates", "--install-dir", "/games", "--keep-archives"],
             ["adopt", "mapping.json", "--dry-run"],
             ["steam", "RJ123456", "--choose", "--no-images"],
             ["steam", "--remove", "--dry-run"],
