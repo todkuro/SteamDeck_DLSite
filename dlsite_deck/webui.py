@@ -1382,7 +1382,7 @@ class Backend:
         if entry.steam_app_id is not None:
             raise UiError(
                 f"{entry.title} は Steam に登録されています。"
-                " 先に「解除」してから削除してください。"
+                " 先に Steam 登録を解除してから削除してください。"
             )
 
         target = entry.path

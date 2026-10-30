@@ -80,12 +80,31 @@
   .locked { padding: 4px 0; word-break: break-all; }
   .locked code, #steam-launch { color: #cfd6e0; }
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* 行の「その他の操作」。表に出す操作を絞り、残りをここにしまう */
+  .row-menu { position: relative; }
+  .row-menu > summary { list-style: none; cursor: pointer; background: #262a33;
+           border: 1px solid #3a404b; border-radius: 6px; padding: 8px 12px; }
+  .row-menu > summary::-webkit-details-marker { display: none; }
+  .row-menu[open] > summary { background: #2f3542; }
+  .row-menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 3;
+           display: flex; flex-direction: column; gap: 4px; min-width: 9em; padding: 6px;
+           background: #1e2128; border: 1px solid #3a404b; border-radius: 8px;
+           box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  .row-menu-items > button { text-align: left; white-space: nowrap; }
   dialog { background: #1e2128; color: #e6e8ec; border: 1px solid #3a404b;
            border-radius: 10px; padding: 0; max-width: 640px; width: 92%; }
   dialog::backdrop { background: rgba(0,0,0,.6); }
-  .dialog-body { padding: 16px; }
-  .dialog-foot { padding: 12px 16px; border-top: 1px solid #2c313a;
+  /* 中身が長くなっても、ダイアログは画面に収め、スクロールするのは本文だけにする。
+     ダイアログごとスクロールすると、下の「閉じる」などのボタンが画面の外に出てしまう。 */
+  dialog[open] { display: flex; flex-direction: column; max-height: calc(100vh - 32px);
+                 box-sizing: border-box; }
+  .dialog-body { padding: 16px; overflow: auto; min-height: 0; }
+  .dialog-foot { padding: 12px 16px; border-top: 1px solid #2c313a; flex: none;
                  display: flex; gap: 8px; justify-content: flex-end; }
+  /* 実行結果の出力。長いものはこの中でスクロールさせる */
+  pre.run-log { white-space: pre-wrap; max-height: 40vh; overflow: auto; margin: 8px 0 0;
+                padding: 8px; background: #16181d; border: 1px solid #2c313a;
+                border-radius: 6px; }
   label.exe { display: flex; gap: 10px; padding: 9px 10px; border-radius: 8px;
               align-items: baseline; cursor: pointer; }
   /* 行の高さが違っても、丸の位置と文字の左端をそろえる */
@@ -771,6 +790,20 @@ function runButtonHtml(item) {
     : '<button disabled title="Steam に登録すると実行できます（ゲームの Proton 環境が要るため）">実行</button>';
 }
 
+// 行の「その他の操作」メニュー。開閉は <details> に任せ、閉じる処理は
+// closeRowMenus (外を押したとき・中のボタンを押したとき) で行う。
+// 開いているかどうかは HTML に出ないので、applyRows が行を作り直さない限り保たれる。
+function rowMenuHtml(buttons) {
+  return `<details class="row-menu"><summary title="その他の操作" aria-label="その他の操作">☰</summary>`
+    + `<div class="row-menu-items">${buttons.join("")}</div></details>`;
+}
+
+function closeRowMenus(except = null) {
+  for (const menu of document.querySelectorAll("details.row-menu[open]")) {
+    if (menu !== except) menu.open = false;
+  }
+}
+
 // 1 行ぶんの HTML。中身は item と、その作品に走っているジョブで決まる。
 function rowHtml(item) {
   // 更新の有無を判定できない作品が多い (DLsite が upgrade_date を返さない)。
@@ -811,31 +844,42 @@ function rowHtml(item) {
             job.cancel_requested ? "中止しています" : "展開やコピーの途中は中止できません"
           }">中止</button>`);
   } else {
-    actions.push(
-      `<button data-download="${esc(item.id)}">${
-        item.installed ? "再取得" : "取得"}</button>`);
+    const id = esc(item.id);
     const steamBlocked = steamBlockedAttr(item);
+    const redownload = `<button data-download="${id}">${
+      item.installed ? "再取得" : "取得"}</button>`;
+    const register = `<button data-steam="${id}"${steamBlocked}>Steam登録</button>`;
+    const unregister = `<button data-unsteam="${id}"${steamBlocked}>Steam解除</button>`;
+    // Steam に登録したものは、消すと起動できないショートカットが残る。
+    // 解除してからでないと削除させない。
+    const remove = item.steam_app_id
+      ? '<button disabled title="先に Steam 登録を解除してください">削除</button>'
+      : `<button data-delete="${id}" title="展開したファイルを削除">削除</button>`;
+
     if (item.installed && item.category === "game") {
-      actions.push(
-        `<button data-steam="${esc(item.id)}"${steamBlocked}>Steam登録</button>`);
-    }
-    if (item.steam_app_id) {
-      actions.push(
-        `<button data-unsteam="${esc(item.id)}"${steamBlocked}>解除</button>`);
-    }
-    if (item.installed && item.category === "game") actions.push(runButtonHtml(item));
-    if (item.installed) {
-      // DLC は本編と別作品として売られているので、どの作品からでも開ける
-      actions.push(`<button data-link="${esc(item.id)}" title="本編や DLC と重ねる">DLC</button>`);
-      actions.push(`<button data-patch="${esc(item.id)}" title="exe を実行して当てるパッチ">パッチ</button>`);
-      // Steam に登録したものは、消すと起動できないショートカットが残る。
-      // 解除してからでないと削除させない。
+      // その状態で次にやることだけを表に出し、残りはメニューにしまう。
+      // 未登録なら登録 (か削除)、登録済みなら解除が次の操作。
+      // DLC は本編と別作品として売られているので、どのゲームからでも開ける。
+      const others = [
+        redownload,
+        runButtonHtml(item),
+        `<button data-link="${id}" title="本編や DLC と重ねる">DLC</button>`,
+        `<button data-patch="${id}" title="exe を実行して当てるパッチ">パッチ</button>`,
+      ];
       if (item.steam_app_id) {
-        actions.push('<button disabled title="先に Steam 登録を解除してください">削除</button>');
+        actions.push(unregister);
+        others.splice(1, 0, register);  // 登録し直し (名前や起動オプションの反映) 用
+        others.push(remove);
       } else {
-        actions.push(
-          `<button data-delete="${esc(item.id)}" title="展開したファイルを削除">削除</button>`);
+        actions.push(register, remove);
       }
+      actions.push(rowMenuHtml(others));
+    } else {
+      // ゲーム以外 (マンガやボイス) と未取得の作品。Steam にもパッチにも縁が無い。
+      actions.push(redownload);
+      if (item.installed) actions.push(remove);
+      // 展開先を外で消しても、Steam の登録は残る。解除だけはできるようにしておく。
+      if (item.steam_app_id) actions.push(unregister);
     }
   }
   // 更新日が取れる作品は「更新日 / 導入時の更新日」を出す。
@@ -921,6 +965,17 @@ $("category").onchange = render;
 $("filter").onchange = render;
 $("search").oninput = render;
 $("reload").onclick = () => load(true);
+
+// 行のメニューは、外を押すか中の操作を押したら閉じる。開いたメニュー自身の
+// summary を押したときは <details> の開閉に任せる (他のメニューだけ閉じる)。
+document.addEventListener("click", (event) => {
+  const menu = event.target.closest("details.row-menu");
+  const toggling = menu && event.target.closest("summary");
+  closeRowMenus(toggling ? menu : null);
+}, true);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeRowMenus();
+});
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
@@ -1881,30 +1936,41 @@ function localRowHtml(item) {
   if (job) {
     actions.push(`<span class="btn-progress muted"><span class="spinner"></span>処理中</span>`);
   } else {
+    const id = esc(item.id);
     const steamBlocked = steamBlockedAttr(item);
-    if (item.installed) {
-      actions.push(`<button data-steam="${esc(item.id)}"${steamBlocked}>Steam登録</button>`);
-    }
-    if (item.steam_app_id) {
-      actions.push(`<button data-unsteam="${esc(item.id)}"${steamBlocked}>解除</button>`);
-    }
-    if (item.installed) {
-      actions.push(runButtonHtml(item));
-      actions.push(`<button data-link="${esc(item.id)}" title="本編や DLC と重ねる">DLC</button>`);
-      actions.push(`<button data-patch="${esc(item.id)}" title="exe を実行して当てるパッチ">パッチ</button>`);
-      actions.push(`<button data-local-image="${esc(item.id)}" title="表紙・背景に使う画像を選ぶ">画像</button>`);
-    }
-    if (item.archive_exists) {
-      actions.push(item.archive_deletable
-        ? `<button data-local-archive="${esc(item.id)}" title="取り込み元のアーカイブを削除（${
+    const register = `<button data-steam="${id}"${steamBlocked}>Steam登録</button>`;
+    const unregister = `<button data-unsteam="${id}"${steamBlocked}>Steam解除</button>`;
+    const remove = item.steam_app_id
+      ? '<button disabled title="先に Steam 登録を解除してください">削除</button>'
+      : `<button data-delete="${id}" title="取り込んだファイルを削除">削除</button>`;
+    const archive = !item.archive_exists ? ""
+      : item.archive_deletable
+        ? `<button data-local-archive="${id}" title="取り込み元のアーカイブを削除（${
             esc(item.archive_label)}）">アーカイブ削除</button>`
-        : '<button disabled title="取り込み元の外にあるため削除できません">アーカイブ削除</button>');
-    }
-    if (item.steam_app_id) {
-      actions.push('<button disabled title="先に Steam 登録を解除してください">削除</button>');
+        : '<button disabled title="取り込み元の外にあるため削除できません">アーカイブ削除</button>';
+
+    if (item.installed) {
+      // ライブラリのゲームと同じく、次にやることだけを表に出し、残りはメニューにしまう
+      const others = [
+        runButtonHtml(item),
+        `<button data-link="${id}" title="本編や DLC と重ねる">DLC</button>`,
+        `<button data-patch="${id}" title="exe を実行して当てるパッチ">パッチ</button>`,
+        `<button data-local-image="${id}" title="表紙・背景に使う画像を選ぶ">画像</button>`,
+      ];
+      if (archive) others.push(archive);
+      if (item.steam_app_id) {
+        actions.push(unregister);
+        others.unshift(register);  // 登録し直し (名前や起動オプションの反映) 用
+        others.push(remove);
+      } else {
+        actions.push(register, remove);
+      }
+      actions.push(rowMenuHtml(others));
     } else {
-      actions.push(
-        `<button data-delete="${esc(item.id)}" title="取り込んだファイルを削除">削除</button>`);
+      // 記録のみ (展開先を外で消した)。ボタンが少ないので全部表に出す。
+      if (item.steam_app_id) actions.push(unregister);
+      if (archive) actions.push(archive);
+      actions.push(remove);
     }
   }
 
@@ -2208,10 +2274,12 @@ $("run-list").addEventListener("click", async (event) => {
     $("run-output").innerHTML = `<div class="${r.ok ? "" : "ng"}">${esc(r.message)}</div>
       <div class="muted">Proton: ${esc(r.proton)}${
         r.launch_options ? ` ・起動オプション: ${esc(r.launch_options)}` : ""}</div>
-      ${r.output ? `<pre class="muted" style="white-space:pre-wrap">${esc(r.output)}</pre>` : ""}`;
+      ${r.output ? `<pre class="muted run-log">${esc(r.output)}</pre>` : ""}`;
   } catch (error) {
     $("run-output").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
   } finally {
+    // exe の一覧が長いと結果は本文の下に隠れる。出たことが分かるよう見える位置まで送る。
+    $("run-output").scrollIntoView({ block: "nearest" });
     button.disabled = false;
   }
 });
@@ -2325,7 +2393,7 @@ $("patch-list").addEventListener("click", async (event) => {
     $("patch-output").innerHTML = `<div class="${r.ok ? "" : "ng"}">${esc(r.message)}</div>
       <div class="muted">Proton: ${esc(r.proton)}${
         r.launch_options ? ` ・起動オプション: ${esc(r.launch_options)}` : ""}</div>
-      ${r.output ? `<pre class="muted" style="white-space:pre-wrap">${esc(r.output)}</pre>` : ""}`;
+      ${r.output ? `<pre class="muted run-log">${esc(r.output)}</pre>` : ""}`;
     const target = patchWork.targets.find((t) => t.id === targetId);
     if (target && r.ok && !target.installed.includes(r.key)) target.installed.push(r.key);
     renderPatchList();
@@ -2333,6 +2401,8 @@ $("patch-list").addEventListener("click", async (event) => {
     $("patch-output").innerHTML = `<div class="ng">${esc(error.message)}</div>`;
     renderPatchList();
   }
+  // 一覧が長いと結果は本文の下に隠れる。出たことが分かるよう見える位置まで送る。
+  $("patch-output").scrollIntoView({ block: "nearest" });
 });
 
 // ---- Proton 設定 ---------------------------------------------------
