@@ -31,13 +31,14 @@
 
 ## テスト
 
-`py -m unittest discover -s tests`（Linux では `python3 -m unittest discover -s tests`）で、すべてのテストを実行できます。合計 617 件です。
+`py -m unittest discover -s tests`（Linux では `python3 -m unittest discover -s tests`）で、すべてのテストを実行できます。合計 625 件です。
 
 `tests/support.py` は、複数のテストで使う補助（Windows で切られた接続のやり直し、待ち受けの起動、設定ファイルの差し替え）です。
 
 | ファイル | 内容 | 件数 |
 |---|---|---|
-| `test_offline.py` | 通信を使わない処理全般 | 96 |
+| `test_offline.py` | 通信を使わない処理全般 | 99 |
+| `test_open_directory.py` | 作品のディレクトリをファイルマネージャーで開くこと。記録にある作品のディレクトリだけを開き、画面からパスを受け取らないこと | 5 |
 | `test_local.py` | 自由登録。取り込み元の外を読ませないこと、分割アーカイブの判定、取り込み・画像・アーカイブの削除、DLsite に問い合わせないこと（リンクの試験は Linux でのみ動く） | 42 |
 | `test_delete.py` | 作品の削除、キャッシュの片付け、モードの判定 | 72 |
 | `test_cover.py` | タイトルの折り返し、表紙の組み立て、ストア画像の保存 | 59 |

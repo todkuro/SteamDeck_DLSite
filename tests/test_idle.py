@@ -68,7 +68,7 @@ class IdleWatchTest(unittest.TestCase):
         self.assertTrue(self._wait(10))
 
     def test_never_while_a_request_is_in_flight(self):
-        """「Steam を終了する」の待ちのように、処理に時間がかかる要求。"""
+        """「Steam を終了」の待ちのように、処理に時間がかかる要求。"""
         self.watch.begin()
         self.assertFalse(self._wait(120))
         self.watch.end()
@@ -204,7 +204,7 @@ class ConnectionLimitTest(unittest.TestCase):
     def test_a_slow_request_is_not_cut_short(self):
         """処理に時間がかかっても、通信が止まっていなければ切らない。
 
-        「Steam を終了する」は最大 90 秒待つ。その間は通信が無いが、
+        「Steam を終了」は最大 90 秒待つ。その間は通信が無いが、
         待っているのはツール側なので時間切れにはならない。
         """
         class SlowBackend(_Backend):

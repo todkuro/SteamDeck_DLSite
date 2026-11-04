@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -108,7 +109,7 @@ CONFIG_FIELDS = [
      "help": "新しく登録するゲームに適用する。既に割り当て済みのものは変更しない"},
     {"key": "steam_executable", "label": "Steam の実行ファイル", "type": "path",
      "locked": True,
-     "help": "「Steam を終了する」で使う。既定は SteamDeck の場所。"
+     "help": "「Steam を終了」で使う。既定は SteamDeck の場所。"
              " ここに無ければ PATH と Steam のディレクトリからも探す"},
     {"key": "steam_launch_options", "label": "既定の起動オプション", "type": "text",
      "locked": True,
@@ -1081,7 +1082,7 @@ class Backend:
     def steam_state(self) -> dict[str, Any]:
         """Steam が動いているかだけを返す軽い問い合わせ。
 
-        画面の「Steam を終了しました」を押したときに、実際のプロセスを見に行く。
+        画面の「Steam を終了」を押したときに、実際のプロセスを見に行く。
         起動中は ``config.vdf`` / ``shortcuts.vdf`` への書き込みが Steam 終了時に
         上書きされてしまうため、その間の操作は塞ぐ。
 
@@ -1286,7 +1287,7 @@ class Backend:
                        " 起動中のゲームがあれば、先に終了してください。"
                        " 環境によっては終了の指示が効かないことがあります。"
                        " その場合は Steam のメニュー（Steam → 終了）から閉じて、"
-                       "「Steam を終了しました」を押してください。",
+                       "もう一度「Steam を終了」を押してください。",
         }
 
     # -- 作品の削除 ------------------------------------------------------
@@ -1875,6 +1876,36 @@ class Backend:
             entry, exe, relative, arguments, use_launch_options, working_dir=exe.parent
         )
         return response
+
+    def open_directory(self, work_id: str) -> dict[str, Any]:
+        """作品のディレクトリを、ツールを動かしている機械のファイルマネージャーで開く。
+
+        開くのは記録にある作品のディレクトリだけ。画面からパスは受け取らない。
+        Web UI は既定で 127.0.0.1 でしか待ち受けないので、開いた画面は使っている
+        人の目の前に出る。開けない環境 (xdg-open が無いなど) では、画面の
+        「パスをコピー」を使ってもらう。
+        """
+        entry = self._require_installed(work_id)
+        command = _file_manager_command(entry.path)
+        if command is None:
+            raise UiError(
+                "ファイルマネージャーを開くコマンドが見つかりません。"
+                " 「パスをコピー」を使ってください。"
+            )
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                # ツールを終了しても、開いたファイルマネージャーは閉じないように
+                start_new_session=os.name != "nt",
+            )
+        except OSError as error:
+            raise UiError(f"ファイルマネージャーを開けませんでした: {error}") from error
+        # xdg-open はすぐ終わる。終わったものが残らないよう、待つだけのスレッドで回収する
+        threading.Thread(target=process.wait, daemon=True).start()
+        return {"message": f"{entry.title} のディレクトリを開きました。", "path": str(entry.path)}
 
     @staticmethod
     def _require_prefix(target: state.InstalledWork) -> None:
@@ -2742,6 +2773,17 @@ def _check_user_dir(label: str, text: str) -> None:
 
 
 #: パッチに渡す引数の長さの上限
+def _file_manager_command(directory: Path) -> list[str] | None:
+    """ディレクトリをファイルマネージャーで開くコマンド。無ければ None。"""
+    if sys.platform == "win32":
+        return ["explorer", str(directory)]
+    if sys.platform == "darwin":
+        return ["open", str(directory)]
+    # SteamDeck のデスクトップモードでは Dolphin が開く
+    opener = shutil.which("xdg-open")
+    return [opener, str(directory)] if opener else None
+
+
 MAX_PATCH_ARGS = 1000
 
 

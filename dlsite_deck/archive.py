@@ -168,13 +168,20 @@ def extract(
         removed_links = drop_escaping_links(staging)
 
         root, flattened = _content_root(staging, flatten_single_root)
-        entries = _move_contents(root, output_dir)
+
+        # バージョン番号は、移す前に**アーカイブの中身だけ**で取り除く。展開先で行うと、
+        # 更新版の ``Game_v1.1/`` が前回 ``Game/`` に改名したものと別の名前のまま
+        # 並んでしまう (同名があると改名しないため)。先にそろえておけば重ねられる。
+        renamed: list[tuple[Path, Path]] = []
+        if strip_versions:
+            renamed = [
+                (output_dir / before.relative_to(root), output_dir / after.relative_to(root))
+                for before, after in strip_version_names(root)
+            ]
+
+        _move_contents(root, output_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-
-    renamed: list[tuple[Path, Path]] = []
-    if strip_versions:
-        renamed = strip_version_names(output_dir)
 
     return ExtractResult(
         output_dir=output_dir,
@@ -446,23 +453,41 @@ def _is_junk(path: Path) -> bool:
 
 
 def _move_contents(root: Path, output_dir: Path) -> list[Path]:
-    """ステージングの中身を展開先へ移す。既存の同名は上書きする。"""
+    """ステージングの中身を展開先へ移す。展開先の一番上のものを返す。
+
+    再取得 (更新) のときは展開先に前の版がある。**ディレクトリは丸ごと置き換えず、
+    ファイル単位で重ねる。** アーカイブに入っているファイルだけを上書きし、無いものは
+    残す。ゲームの中に書かれたセーブ (RPG ツクール MV の ``www/save/`` など) を
+    消さないため。以前はディレクトリごと消してから移していて、実際にセーブが消えた。
+    """
     moved = []
     for entry in sorted(root.iterdir()):
         if _is_junk(entry):
             continue
-
         target = output_dir / entry.name
-        if target.exists():
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-
-        shutil.move(str(entry), str(target))
+        _merge_into(entry, target)
         moved.append(target)
-
     return moved
+
+
+def _merge_into(source: Path, target: Path) -> None:
+    """``source`` を ``target`` の位置へ移す。どちらもディレクトリなら中身を重ねる。"""
+    source_is_dir = source.is_dir() and not source.is_symlink()
+
+    if target.is_symlink() or target.exists():
+        target_is_dir = target.is_dir() and not target.is_symlink()
+        if source_is_dir and target_is_dir:
+            for child in sorted(source.iterdir()):
+                _merge_into(child, target / child.name)
+            return
+        # ファイル同士なら上書き。ファイルとディレクトリが入れ替わったときは、
+        # アーカイブの形に合わせるしかないので、前のものを消す。
+        if target_is_dir:
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+    shutil.move(str(source), str(target))
 
 
 # ----------------------------------------------------------------------

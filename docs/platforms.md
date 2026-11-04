@@ -113,9 +113,9 @@ update-desktop-database ~/.local/share/applications
 
 多くの環境では、`.desktop` ファイルを置くだけでメニューに表示されます。このコマンドが必要なのは、すぐに表示されないときだけです。
 
-### 「Steam を終了する」はログインしてから
+### 「Steam を終了」はログインしてから
 
-Web UI の「Steam を終了する」は、`steam -shutdown` コマンドを使っています。
+Web UI の「Steam を終了」は、`steam -shutdown` コマンドを使っています。
 Steam がサインイン画面のままだと、このコマンドを受け取っても終了しません。
 
 | Steam の状態 | 結果 |
@@ -125,7 +125,7 @@ Steam がサインイン画面のままだと、このコマンドを受け取�
 
 どちらの場合も、Steam のログには `Steam is already running, exiting (command line was forwarded)` と表示されます。指示は届いていますが、ログインする前の Steam はそれを処理しません。
 
-ツールは Steam を強制終了しません。`shortcuts.vdf` を書き戻す前に止めてしまうおそれがあるためです。しばらく待っても終了しない場合は、Steam のメニューから終了するよう案内します。Steam を終了したあとに「Steam を終了しました」を押すと、操作を続けられます。
+ツールは Steam を強制終了しません。`shortcuts.vdf` を書き戻す前に止めてしまうおそれがあるためです。しばらく待っても終了しない場合は、Steam のメニューから終了するよう案内します。Steam を終了したあとにもう一度「Steam を終了」を押すと、操作を続けられます。
 
 ### インストールしたばかりの Steam
 

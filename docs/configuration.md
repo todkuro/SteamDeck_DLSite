@@ -37,7 +37,7 @@ python3 -m dlsite_deck init
 | `steam_cover_title` | 環境による | 表紙にタイトルを入れるかどうか。`rsvg-convert` と日本語フォントがあればオン、なければオフが既定値です |
 | `steam_logo_source` | `title` | ロゴに使うもの。`title`（タイトルの透過 PNG）、`exe`（exe のアイコン）、`none`（設定しない）から選びます |
 | `steam_compat_tool` | `proton_experimental`（Windows では空） | 登録時に割り当てる Proton。空の場合は割り当てません |
-| `steam_executable` 🔒 | `/usr/bin/steam` | 「Steam を終了する」で使う Steam の実行ファイル。見つからない場合は PATH や Steam のディレクトリからも探します |
+| `steam_executable` 🔒 | `/usr/bin/steam` | 「Steam を終了」で使う Steam の実行ファイル。見つからない場合は PATH や Steam のディレクトリからも探します |
 | `steam_launch_options` 🔒 | `""` | Web UI から新しく登録するゲームに付ける起動オプション（[文字化け対策](cli.md#起動オプション日本語の文字化け対策)） |
 | `acknowledged_paths` 🔒 | `[]` | 書き込みを承認した、プロジェクト外のパス。一度承認すると、次からは確認しません |
 | `tool_dirs` 🔒 | `[]` | 展開用のコマンドなどを探すディレクトリ。PATH より優先します |

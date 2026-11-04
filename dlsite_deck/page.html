@@ -182,8 +182,7 @@
 <div id="path-banner"></div>
 <div id="steam-banner">
   <span id="steam-banner-text">Steam 起動中のため設定できない項目があります</span>
-  <button id="steam-stop" type="button">Steam を終了する</button>
-  <button id="steam-recheck" type="button">Steam を終了しました</button>
+  <button id="steam-stop" type="button">Steam を終了</button>
   <span id="steam-recheck-note" class="muted"></span>
 </div>
 <div id="notice"></div>
@@ -798,6 +797,39 @@ function rowMenuHtml(buttons) {
     + `<div class="row-menu-items">${buttons.join("")}</div></details>`;
 }
 
+// 作品のディレクトリを開く・パスを写すボタン。☰ の中に入れる。
+// 開くのはツールを動かしている機械なので、別の端末から画面を見ているときや、
+// 開くコマンドが無い環境のために、パスのコピーも並べておく。
+function folderButtons(item) {
+  const id = esc(item.id);
+  return [
+    `<button data-open-dir="${id}" title="${esc(item.directory)}">ファイルマネージャーで開く</button>`,
+    `<button data-copy-path="${esc(item.directory)}" title="${esc(item.directory)}">パスをコピー</button>`,
+  ];
+}
+
+// 文字列をクリップボードに写す。navigator.clipboard は安全な接続 (localhost を含む)
+// でしか使えないので、使えないときは選択してコピーする古い方法に切り替える。
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_error) { /* 下の方法を試す */ }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch (_error) { copied = false; }
+  area.remove();
+  return copied;
+}
+
 function closeRowMenus(except = null) {
   for (const menu of document.querySelectorAll("details.row-menu[open]")) {
     if (menu !== except) menu.open = false;
@@ -865,6 +897,7 @@ function rowHtml(item) {
         runButtonHtml(item),
         `<button data-link="${id}" title="本編や DLC と重ねる">DLC</button>`,
         `<button data-patch="${id}" title="exe を実行して当てるパッチ">パッチ</button>`,
+        ...folderButtons(item),
       ];
       if (item.steam_app_id) {
         actions.push(unregister);
@@ -880,6 +913,7 @@ function rowHtml(item) {
       if (item.installed) actions.push(remove);
       // 展開先を外で消しても、Steam の登録は残る。解除だけはできるようにしておく。
       if (item.steam_app_id) actions.push(unregister);
+      if (item.installed) actions.push(rowMenuHtml(folderButtons(item)));
     }
   }
   // 更新日が取れる作品は「更新日 / 導入時の更新日」を出す。
@@ -980,6 +1014,25 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) return;
+
+  if (target.dataset.openDir) {
+    try {
+      const r = await post("/api/open", { work_id: target.dataset.openDir });
+      showResult(r.message);
+    } catch (error) { notice(error.message); }
+    return;
+  }
+
+  if (target.dataset.copyPath !== undefined) {
+    const path = target.dataset.copyPath;
+    if (await copyText(path)) {
+      showResult(`パスをコピーしました: ${path}`);
+    } else {
+      // 写せない環境でも、パスそのものは見せて手で写せるようにする
+      notice(`コピーできませんでした。パス: ${path}`);
+    }
+    return;
+  }
 
   if (target.dataset.download) {
     target.disabled = true;
@@ -1956,6 +2009,7 @@ function localRowHtml(item) {
         `<button data-link="${id}" title="本編や DLC と重ねる">DLC</button>`,
         `<button data-patch="${id}" title="exe を実行して当てるパッチ">パッチ</button>`,
         `<button data-local-image="${id}" title="表紙・背景に使う画像を選ぶ">画像</button>`,
+        ...folderButtons(item),
       ];
       if (archive) others.push(archive);
       if (item.steam_app_id) {
@@ -2552,14 +2606,13 @@ function setSteamRunning(running, note) {
   syncHeaderHeight();
 
   // ゲームモードでは Steam を終了できない (Steam 自身がセッションで、
-  // このツールもそこから起動されている)。「終了しました」は押しても
-  // 永遠に成立しないので、案内ごと差し替える。
+  // このツールもそこから起動されている)。終了を待っても永遠に成立しない
+  // ので、案内ごと差し替える。
   $("steam-banner-text").textContent = canQuitSteam
     ? "Steam 起動中のため設定できない項目があります"
     : "ゲームモードのため設定できない項目があります。デスクトップモードに切り替えてください";
-  // ゲームモードではどちらも出さない (終了するとツールも一緒に終了する)
+  // ゲームモードでは出さない (終了するとツールも一緒に終了する)
   $("steam-stop").hidden = !canQuitSteam;
-  $("steam-recheck").hidden = !canQuitSteam;
   $("steam-recheck-note").textContent = running && canQuitSteam ? (note || "") : "";
   if (changed) {
     // ボタンの有効・無効は描画時に決めている。状態が変わったら描き直す。
@@ -2571,14 +2624,11 @@ function setSteamRunning(running, note) {
 }
 
 /** 実際のプロセスを見に行く。塞いだままにしないための確認手段。 */
-async function refreshSteamState(fromButton) {
+async function refreshSteamState() {
   try {
     const r = await call("/api/steam/state");
     canQuitSteam = r.can_quit_steam !== false;
-    setSteamRunning(
-      r.running,
-      fromButton && r.running ? "まだ起動しています。終了してからもう一度押してください。" : ""
-    );
+    setSteamRunning(r.running, "");
     return r.running;
   } catch (error) {
     notice(error.message);
@@ -2586,37 +2636,37 @@ async function refreshSteamState(fromButton) {
   }
 }
 
-$("steam-recheck").onclick = async () => {
-  const button = $("steam-recheck");
-  button.disabled = true;
-  $("steam-recheck-note").textContent = "確認しています…";
-  await refreshSteamState(true);
-  button.disabled = false;
-};
-
-// Steam に終了を頼む。手で終わらせてもらう手間を省くだけで、やることは同じ。
+// 「Steam を終了」。押したらまず実際のプロセスを見る。
+// 既に終了していれば (自分で閉じた場合など) 帯を消すだけで済ませ、
+// 起動していれば Steam に終了を頼む。手で終わらせてもらう手間を省くだけで、やることは同じ。
 $("steam-stop").onclick = async () => {
-  if (!confirm("Steam を終了します。\n\n"
-               + "起動中のゲームがあれば、先に終了してください。\n"
-               + "よろしいですか?")) return;
-
   const stop = $("steam-stop");
-  const recheck = $("steam-recheck");
   stop.disabled = true;
-  recheck.disabled = true;
-  $("steam-recheck-note").textContent = "終了しています…（少し時間がかかります）";
+  $("steam-recheck-note").textContent = "確認しています…";
 
   try {
-    const result = await post("/api/steam/stop", {});
-    setSteamRunning(result.running, result.running ? result.message : "");
-    notice(result.running ? result.message : "");
-  } catch (error) {
-    notice(error.message);
-    $("steam-recheck-note").textContent = "";
-  }
+    const running = await refreshSteamState();
+    if (!running) return;
 
-  stop.disabled = false;
-  recheck.disabled = false;
+    if (!confirm("Steam を終了します。\n\n"
+                 + "起動中のゲームがあれば、先に終了してください。\n"
+                 + "よろしいですか?")) {
+      $("steam-recheck-note").textContent = "";
+      return;
+    }
+
+    $("steam-recheck-note").textContent = "終了しています…（少し時間がかかります）";
+    try {
+      const result = await post("/api/steam/stop", {});
+      setSteamRunning(result.running, result.running ? result.message : "");
+      notice(result.running ? result.message : "");
+    } catch (error) {
+      notice(error.message);
+      $("steam-recheck-note").textContent = "";
+    }
+  } finally {
+    stop.disabled = false;
+  }
 };
 
 /**
@@ -2627,7 +2677,7 @@ $("steam-stop").onclick = async () => {
  * 起動していたら false を返し、画面を起動中の表示に切り替える。
  */
 async function ensureSteamStopped() {
-  const running = await refreshSteamState(false);
+  const running = await refreshSteamState();
   if (running) {
     notice(canQuitSteam
       ? "Steam が起動中のため中断しました。終了してからやり直してください。"

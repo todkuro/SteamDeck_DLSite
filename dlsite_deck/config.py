@@ -95,7 +95,7 @@ class Config:
     #: 実体の無い互換ツールを指す ``CompatToolMapping`` を ``config.vdf`` に
     #: 書き込んでしまう (節が無ければ作るため、Linux 専用の節を新設することになる)。
     steam_compat_tool: str = field(default_factory=lambda: default_compat_tool())
-    #: Steam 本体の実行ファイル。「Steam を終了する」で使う。
+    #: Steam 本体の実行ファイル。「Steam を終了」で使う。
     #:
     #: 既定は SteamDeck の場所。ここに無い環境 (Windows など) では、PATH と
     #: Steam のディレクトリからも探すので、たいていは既定のままでよい。

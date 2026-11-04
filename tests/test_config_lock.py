@@ -5,7 +5,7 @@
 読めなくてもネットワーク越しに 127.0.0.1 へは届く。API で次を変えられると、
 サンドボックスの外でプログラムを動かせてしまう。
 
-* ``steam_executable`` … 「Steam を終了する」で実行される
+* ``steam_executable`` … 「Steam を終了」で実行される
 * ``tool_dirs`` … 展開や表紙の描画で、そこにある bsdtar / rsvg-convert が実行される
 * ``state_file`` … 偽の記録で、自分の exe を登録させたりパッチとして実行させたりできる
 * ``install_dirs`` / ``download_dir`` … ゲームを自分の手元に落とさせて持ち出せる

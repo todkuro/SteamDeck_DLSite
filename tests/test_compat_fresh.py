@@ -212,7 +212,8 @@ class ShutdownMessageTest(unittest.TestCase):
 
         self.assertTrue(result["running"])
         self.assertIn("メニュー", result["message"])
-        self.assertIn("Steam を終了しました", result["message"])
+        # 閉じたあとは、同じ「Steam を終了」を押せば帯が消える
+        self.assertIn("「Steam を終了」を押して", result["message"])
 
     def test_success_says_so_plainly(self):
         self.steam.shutdown_steam = lambda *a, **k: True

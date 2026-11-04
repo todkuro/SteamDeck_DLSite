@@ -278,6 +278,69 @@ class ArchiveTest(unittest.TestCase):
         info.filename = raw.decode("cp437")
         self.assertEqual(archive._decode_zip_name(info), original)
 
+    def test_reextract_keeps_files_the_archive_does_not_have(self):
+        # 再取得 (更新) で、ゲームの中に書かれたセーブを消さないこと。
+        # RPG ツクール MV は www/save/ に書く。以前は www/ ごと置き換えて消していた。
+        output = self.root / "upd"
+        first = self._make_zip("v1.zip", {
+            "Game/Game.exe": b"MZ1", "Game/www/data/a.json": b"v1",
+        })
+        archive.extract(archive.plan_archive([first]), output)
+        (output / "www" / "save").mkdir()
+        (output / "www" / "save" / "file1.rpgsave").write_bytes(b"save")
+        (output / "user.cfg").write_bytes(b"cfg")
+
+        second = self._make_zip("v2.zip", {
+            "Game/Game.exe": b"MZ2", "Game/www/data/a.json": b"v2",
+            "Game/www/data/b.json": b"new",
+        })
+        archive.extract(archive.plan_archive([second]), output)
+
+        self.assertEqual((output / "www" / "save" / "file1.rpgsave").read_bytes(), b"save")
+        self.assertEqual((output / "user.cfg").read_bytes(), b"cfg")
+        # アーカイブにあるものは新しい版になる
+        self.assertEqual((output / "Game.exe").read_bytes(), b"MZ2")
+        self.assertEqual((output / "www" / "data" / "a.json").read_bytes(), b"v2")
+        self.assertEqual((output / "www" / "data" / "b.json").read_bytes(), b"new")
+
+    def test_reextract_lands_a_new_version_name_on_the_stripped_one(self):
+        # 前回 Game_v1.0/ を Game/ に改名していたら、更新版の Game_v1.1/ も Game/ に
+        # 重なること。別の名前で並ぶと、セーブのある Game/ が古いまま取り残される。
+        output = self.root / "ver"
+        first = self._make_zip("v1.zip", {
+            "Game_v1.0/Game.exe": b"MZ1", "readme.txt": b"r",
+        })
+        archive.extract(archive.plan_archive([first]), output)
+        self.assertTrue((output / "Game" / "Game.exe").is_file())
+        (output / "Game" / "save.dat").write_bytes(b"save")
+
+        second = self._make_zip("v2.zip", {
+            "Game_v1.1/Game.exe": b"MZ2", "readme.txt": b"r",
+        })
+        result = archive.extract(archive.plan_archive([second]), output)
+
+        self.assertFalse((output / "Game_v1.1").exists())
+        self.assertEqual((output / "Game" / "Game.exe").read_bytes(), b"MZ2")
+        self.assertEqual((output / "Game" / "save.dat").read_bytes(), b"save")
+        # 改名の報告は展開先のパスで返す (ステージングは消えている)
+        self.assertIn((output / "Game_v1.1", output / "Game"), result.renamed)
+
+    @unittest.skipIf(os.name == "nt", "シンボリックリンクの作成に権限が要る")
+    def test_reextract_does_not_follow_a_link_in_the_output(self):
+        # 展開先のディレクトリがリンクに置き換わっていても、その先へは書き込まない
+        outside = self.root / "outside"
+        outside.mkdir()
+        output = self.root / "link"
+        output.mkdir()
+        os.symlink(outside, output / "www")
+
+        update = self._make_zip("v.zip", {"www/a.json": b"x", "Game.exe": b"MZ"})
+        archive.extract(archive.plan_archive([update]), output)
+
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((output / "www").is_symlink())
+        self.assertTrue((output / "www" / "a.json").is_file())
+
     def test_find_executables_prefers_shallow_non_installer(self):
         base = self.root / "game"
         (base / "tools").mkdir(parents=True)

@@ -146,6 +146,8 @@ POST_ROUTES: dict[str, Callable[["Backend", dict[str, Any]], Any]] = {
         _s(p, "work_id"), _s(p, "relative"), args=_s(p, "args"),
         use_launch_options=p.get("use_launch_options") is not False,
     ),
+    # 作品のディレクトリをファイルマネージャーで開く。パスは受け取らず、記録から引く。
+    "/api/open": lambda b, p: b.open_directory(_s(p, "work_id")),
     "/api/config": _save_config,
     # 取り込み元は番号と相対パスで受け取る。場所そのものは受け取らない (local を参照)。
     "/api/local/import": lambda b, p: b.start_local_import(p),
@@ -164,7 +166,7 @@ MAX_BODY = 1_000_000
 #:
 #: 数えるのは**通信が止まっている時間だけ**で、ツールが処理している時間は
 #: 含まない。ダウンロードは別のスレッドで進み、画面は短い問い合わせを繰り返す
-#: だけなので、何十分かかっても影響しない。「Steam を終了する」のように 90 秒
+#: だけなので、何十分かかっても影響しない。「Steam を終了」のように 90 秒
 #: 待つ操作も、その間は通信していないので切れない。画面は接続するとすぐに
 #: 要求を送るので、1 分あれば十分に余裕がある。
 CONNECTION_TIMEOUT = 60
@@ -286,7 +288,7 @@ class IdleWatch:
     「使われている」とみなすもの:
 
     * 合言葉付きの API 呼び出し (画面は開いている間、1 分ごとに合図を送る)
-    * 処理中の要求 (「Steam を終了する」の待ちなど)
+    * 処理中の要求 (「Steam を終了」の待ちなど)
     * ダウンロード・展開・順番待ち・表紙の作り直し (``busy``)
 
     合言葉の無い要求は数えない。よそのプログラムが接続し続けるだけで、
